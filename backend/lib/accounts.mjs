@@ -121,7 +121,7 @@ function cleanText(value, max) {
 function cleanUrl(value) {
   const text = String(value ?? "").trim().slice(0, 2000);
   if (!text) return "";
-  if (text.startsWith("/api/")) return text;
+  if (text.startsWith("/api/") || text.startsWith("/m/")) return text;
   if (/^https?:\/\//i.test(text)) return text;
   return "";
 }

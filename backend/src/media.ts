@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { config } from './config.js';
 import { ApiError } from './errors.js';
 import type { Track } from './normalize.js';
+import { relayUpstreamUrl } from './relay-url.js';
 
 const ALLOWED_MEDIA_HOSTS = [/(^|\.)media-rj\.com$/i, /(^|\.)rjassets\.com$/i];
 
@@ -21,6 +22,14 @@ export async function proxyTrackAudio(req: FastifyRequest, reply: FastifyReply, 
   if (url.protocol !== 'https:' || !ALLOWED_MEDIA_HOSTS.some((re) => re.test(url.hostname))) {
     throw new ApiError(502, 'BAD_MEDIA_URL', 'Upstream media URL host is not allowed');
   }
+  let fetchUrl = url;
+  if (config.mediaRelayBase) {
+    try {
+      fetchUrl = relayUpstreamUrl(url, config.mediaRelayBase);
+    } catch {
+      throw new ApiError(502, 'BAD_MEDIA_URL', 'Media relay base is invalid');
+    }
+  }
 
   const headers: Record<string, string> = {};
   const range = req.headers.range;
@@ -34,7 +43,7 @@ export async function proxyTrackAudio(req: FastifyRequest, reply: FastifyReply, 
 
   let res: Response;
   try {
-    res = await fetch(url, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers, signal: ac.signal });
+    res = await fetch(fetchUrl, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers, signal: ac.signal });
   } catch (err: any) {
     clearTimeout(timer);
     if (ac.signal.aborted) throw new ApiError(504, 'MEDIA_TIMEOUT', 'Media server did not respond in time');

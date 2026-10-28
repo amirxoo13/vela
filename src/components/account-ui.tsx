@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent, type InputHTMLAttributes } 
 import { useAccount, type PublicUser } from "@/lib/account-store";
 import { useCatalog } from "@/lib/catalog-store";
 import { useLibrary } from "@/lib/library";
+import { relayMediaUrl } from "@/lib/media-relay";
 import { apiUrl } from "@/lib/music-api";
 import { usePlayer } from "@/lib/player-store";
 import { APP_VERSION } from "@/lib/version";
@@ -395,7 +396,7 @@ export function FollowingScreen() {
       {follows.map((artist) => (
         <li key={artist.id} className="flex items-center gap-3 rounded-2xl bg-ink/15 p-2">
           {artist.image ? (
-            <img src={artist.image} alt="" className="size-14 rounded-full object-cover" />
+            <img src={relayMediaUrl(artist.image)} alt="" className="size-14 rounded-full object-cover" />
           ) : (
             <span className="grid size-14 place-items-center rounded-full bg-ink/30 text-sm font-extrabold">{artist.name.slice(0, 1)}</span>
           )}
@@ -428,7 +429,7 @@ export function SavedAlbumsScreen() {
         <article key={album.id} className="text-left">
           <button type="button" onClick={() => known[album.id] && openAlbum(album.id)} className="block w-full text-left">
             {album.cover ? (
-              <img src={album.cover} alt="" className="aspect-square w-full rounded-2xl object-cover" />
+              <img src={relayMediaUrl(album.cover)} alt="" className="aspect-square w-full rounded-2xl object-cover" />
             ) : (
               <span className="block aspect-square w-full rounded-2xl bg-ink/30" />
             )}

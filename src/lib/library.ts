@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { trackById, useCatalog, type Track } from "@/lib/catalog-store";
+import { relayMediaUrl } from "@/lib/media-relay";
 import { emitSync, type FollowSnap, type PlaylistSnap, type SavedAlbumSnap, type TrackSnap } from "@/lib/sync-events";
 
 export type HistoryItem = TrackSnap & { at: number };
@@ -56,9 +57,9 @@ function snapshotOf(track: Track): HistoryItem | null {
     id: track.id,
     title: track.title,
     artist: track.artist,
-    cover: track.cover,
+    cover: relayMediaUrl(track.cover),
     duration: track.duration,
-    streamUrl: track.streamUrl,
+    streamUrl: relayMediaUrl(track.streamUrl),
     downloadPath: track.downloadPath,
     at: Date.now(),
   };
@@ -76,9 +77,9 @@ export function trackSnap(id: string): TrackSnap {
     id: source.id,
     title: source.title,
     artist: source.artist,
-    cover: source.cover,
+    cover: relayMediaUrl(source.cover || ""),
     duration: source.duration,
-    streamUrl: source.streamUrl,
+    streamUrl: relayMediaUrl(source.streamUrl || ""),
     downloadPath: source.downloadPath,
   };
 }
@@ -112,12 +113,29 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         savedAlbums?: SavedAlbum[];
       };
       set({
-        history: Array.isArray(data.history) ? data.history.filter((item) => item?.id && item.title).slice(0, 80) : [],
+        history: Array.isArray(data.history)
+          ? data.history
+              .filter((item) => item?.id && item.title)
+              .slice(0, 80)
+              .map((item) => ({
+                ...item,
+                cover: relayMediaUrl(item.cover || ""),
+                streamUrl: relayMediaUrl(item.streamUrl || ""),
+              }))
+          : [],
         playlists: Array.isArray(data.playlists)
           ? data.playlists.filter((item) => item?.id && typeof item.name === "string")
           : [],
-        follows: Array.isArray(data.follows) ? data.follows.filter((item) => item?.id && item.name) : [],
-        savedAlbums: Array.isArray(data.savedAlbums) ? data.savedAlbums.filter((item) => item?.id && item.title) : [],
+        follows: Array.isArray(data.follows)
+          ? data.follows
+              .filter((item) => item?.id && item.name)
+              .map((item) => ({ ...item, image: relayMediaUrl(item.image || "") }))
+          : [],
+        savedAlbums: Array.isArray(data.savedAlbums)
+          ? data.savedAlbums
+              .filter((item) => item?.id && item.title)
+              .map((item) => ({ ...item, cover: relayMediaUrl(item.cover || "") }))
+          : [],
         hydrated: true,
       });
     } catch {
@@ -195,20 +213,22 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (playlist) emitSync({ type: "playlist", playlist: playlistSnap(playlist) });
   },
   setFollow: (artist, on) => {
+    const saved = { ...artist, image: relayMediaUrl(artist.image || "") };
     const follows = on
-      ? [artist, ...get().follows.filter((item) => item.id !== artist.id)]
+      ? [saved, ...get().follows.filter((item) => item.id !== saved.id)]
       : get().follows.filter((item) => item.id !== artist.id);
     set({ follows });
     persist({ ...get(), follows });
-    emitSync(on ? { type: "follow", artist } : { type: "unfollow", id: artist.id });
+    emitSync(on ? { type: "follow", artist: saved } : { type: "unfollow", id: artist.id });
   },
   setSavedAlbum: (album, on) => {
+    const saved = { ...album, cover: relayMediaUrl(album.cover || "") };
     const savedAlbums = on
-      ? [album, ...get().savedAlbums.filter((item) => item.id !== album.id)]
+      ? [saved, ...get().savedAlbums.filter((item) => item.id !== saved.id)]
       : get().savedAlbums.filter((item) => item.id !== album.id);
     set({ savedAlbums });
     persist({ ...get(), savedAlbums });
-    emitSync(on ? { type: "album", album } : { type: "album-remove", id: album.id });
+    emitSync(on ? { type: "album", album: saved } : { type: "album-remove", id: album.id });
   },
 }));
 
@@ -229,8 +249,8 @@ export function resolveListenTrack(id: string): Track | null {
     artist: saved.artist,
     albumId: "",
     duration: saved.duration,
-    cover: saved.cover,
-    streamUrl: saved.streamUrl,
+    cover: relayMediaUrl(saved.cover || ""),
+    streamUrl: relayMediaUrl(saved.streamUrl || ""),
     downloadPath: saved.downloadPath,
     plays: null,
     likes: null,

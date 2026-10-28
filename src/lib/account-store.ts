@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useCatalog, type Track } from "@/lib/catalog-store";
 import { useLibrary, type FollowedArtist, type SavedAlbum } from "@/lib/library";
+import { canonicalMediaUrl, relayMediaUrl } from "@/lib/media-relay";
 import { apiUrl, english } from "@/lib/music-api";
 import { usePlayer, type ThemeId } from "@/lib/player-store";
 import {
@@ -110,16 +111,33 @@ async function send<T>(path: string, method = "GET", body?: unknown): Promise<T>
   return payload?.data as T;
 }
 
-function asTrack(track: TrackSnap): Track {
+function showTrack<T extends TrackSnap>(track: T): T {
   return {
-    id: track.id,
-    title: track.title,
-    artist: track.artist,
+    ...track,
+    cover: relayMediaUrl(track.cover || ""),
+    streamUrl: relayMediaUrl(track.streamUrl || ""),
+  };
+}
+
+function storeTrack<T extends TrackSnap>(track: T): T {
+  return {
+    ...track,
+    cover: canonicalMediaUrl(track.cover || ""),
+    streamUrl: canonicalMediaUrl(track.streamUrl || ""),
+  };
+}
+
+function asTrack(track: TrackSnap): Track {
+  const shown = showTrack(track);
+  return {
+    id: shown.id,
+    title: shown.title,
+    artist: shown.artist,
     albumId: "",
-    duration: track.duration,
-    cover: track.cover,
-    streamUrl: track.streamUrl,
-    downloadPath: track.downloadPath,
+    duration: shown.duration,
+    cover: shown.cover,
+    streamUrl: shown.streamUrl,
+    downloadPath: shown.downloadPath,
     plays: null,
     likes: null,
   };
@@ -145,29 +163,35 @@ export function guestSnapshot() {
         .filter((id) => player.posts[id])
         .map((id) => {
           const story = useCatalog.getState().stories.find((item) => item.id === id);
-          return { id, name: story?.title || "Artist", image: story?.image || "" };
+          return { id, name: story?.title || "Artist", image: canonicalMediaUrl(story?.image || "") };
         });
+  const snap = (id: string): TrackSnap => {
+    const known = useCatalog.getState().trackMap[id];
+    if (known?.title) {
+      return storeTrack({
+        id: known.id,
+        title: known.title,
+        artist: known.artist,
+        cover: known.cover,
+        duration: known.duration,
+        streamUrl: known.streamUrl,
+        downloadPath: known.downloadPath,
+      });
+    }
+    const history = library.history.find((item) => item.id === id);
+    if (history) return storeTrack(history);
+    return { id, title: "Track", artist: "", cover: "", duration: 0, streamUrl: "", downloadPath: "" };
+  };
   return {
-    liked: likedIds.map((id) => {
-      const known = useCatalog.getState().trackMap[id];
-      if (known?.title) return { id: known.id, title: known.title, artist: known.artist, cover: known.cover, duration: known.duration, streamUrl: known.streamUrl, downloadPath: known.downloadPath };
-      const history = library.history.find((item) => item.id === id);
-      if (history) return history;
-      return { id, title: "Track", artist: "", cover: "", duration: 0, streamUrl: "", downloadPath: "" };
-    }),
+    liked: likedIds.map(snap),
     playlists: library.playlists.map((playlist) => ({
       id: playlist.id,
       name: playlist.name,
-      tracks: playlist.trackIds.map((id) => {
-        const known = useCatalog.getState().trackMap[id];
-        if (known?.title) return { id: known.id, title: known.title, artist: known.artist, cover: known.cover, duration: known.duration, streamUrl: known.streamUrl, downloadPath: known.downloadPath };
-        const history = library.history.find((item) => item.id === id);
-        return history ?? { id, title: "Track", artist: "", cover: "", duration: 0, streamUrl: "", downloadPath: "" };
-      }),
+      tracks: playlist.trackIds.map(snap),
     })),
-    history: library.history,
-    follows,
-    albums: library.savedAlbums,
+    history: library.history.map(storeTrack),
+    follows: follows.map((artist) => ({ ...artist, image: canonicalMediaUrl(artist.image || "") })),
+    albums: library.savedAlbums.map((album) => ({ ...album, cover: canonicalMediaUrl(album.cover || "") })),
     theme: player.theme,
   };
 }
@@ -175,28 +199,33 @@ export function guestSnapshot() {
 function applyServerLibrary(doc: LibraryDoc) {
   runMuted(() => {
     const liked: Record<string, boolean> = {};
-    for (const track of doc.liked) {
+    const likedTracks = doc.liked.map(showTrack);
+    const history = doc.history.map(showTrack);
+    const playlists = doc.playlists.map((playlist) => ({ ...playlist, tracks: playlist.tracks.map(showTrack) }));
+    const follows = doc.follows.map((artist) => ({ ...artist, image: relayMediaUrl(artist.image || "") }));
+    const albums = doc.albums.map((album) => ({ ...album, cover: relayMediaUrl(album.cover || "") }));
+    for (const track of likedTracks) {
       liked[track.id] = true;
       ensure(track);
     }
-    for (const track of doc.history) ensure(track);
-    for (const playlist of doc.playlists) for (const track of playlist.tracks) ensure(track);
+    for (const track of history) ensure(track);
+    for (const playlist of playlists) for (const track of playlist.tracks) ensure(track);
     const posts: Record<string, boolean> = {};
     for (const [id, on] of Object.entries(usePlayer.getState().posts)) {
       if (!id.startsWith("artist:") && !id.startsWith("user:")) posts[id] = on;
     }
-    for (const artist of doc.follows) posts[artist.id] = true;
+    for (const artist of follows) posts[artist.id] = true;
     usePlayer.setState({ liked, posts, theme: themeOf(doc.theme) });
     usePlayer.getState().commit();
     useLibrary.setState({
-      history: doc.history.filter((item) => item.id && item.title).slice(0, 80),
-      playlists: doc.playlists.map((playlist) => ({
+      history: history.filter((item) => item.id && item.title).slice(0, 80),
+      playlists: playlists.map((playlist) => ({
         id: playlist.id,
         name: playlist.name,
         trackIds: playlist.tracks.map((track) => track.id),
       })),
-      follows: doc.follows,
-      savedAlbums: doc.albums,
+      follows,
+      savedAlbums: albums,
       hydrated: true,
     });
     useLibrary.getState().commitLocal();
@@ -269,23 +298,26 @@ function fold(event: SyncEvent) {
 async function pushEvent(event: SyncEvent) {
   switch (event.type) {
     case "like":
-      await send("/api/v1/me/likes", "PUT", { track: event.track });
+      await send("/api/v1/me/likes", "PUT", { track: storeTrack(event.track) });
       return;
     case "unlike":
       await send(`/api/v1/me/likes/${encodeURIComponent(event.id)}`, "DELETE");
       return;
     case "history":
-      await send("/api/v1/me/history", "POST", { track: event.track, at: event.track.at });
+      await send("/api/v1/me/history", "POST", { track: storeTrack(event.track), at: event.track.at });
       return;
     case "playlist":
       try {
         await send(`/api/v1/me/playlists/${encodeURIComponent(event.playlist.id)}`, "PATCH", {
           name: event.playlist.name,
-          tracks: event.playlist.tracks,
+          tracks: event.playlist.tracks.map(storeTrack),
         });
       } catch (error) {
         if (error instanceof AccountError && error.status === 404) {
-          await send("/api/v1/me/playlists", "POST", event.playlist);
+          await send("/api/v1/me/playlists", "POST", {
+            ...event.playlist,
+            tracks: event.playlist.tracks.map(storeTrack),
+          });
           return;
         }
         throw error;
@@ -295,13 +327,13 @@ async function pushEvent(event: SyncEvent) {
       await send(`/api/v1/me/playlists/${encodeURIComponent(event.id)}`, "DELETE");
       return;
     case "follow":
-      await send("/api/v1/me/follows", "PUT", event.artist);
+      await send("/api/v1/me/follows", "PUT", { ...event.artist, image: canonicalMediaUrl(event.artist.image || "") });
       return;
     case "unfollow":
       await send(`/api/v1/me/follows/${encodeURIComponent(event.id)}`, "DELETE");
       return;
     case "album":
-      await send("/api/v1/me/albums", "PUT", event.album);
+      await send("/api/v1/me/albums", "PUT", { ...event.album, cover: canonicalMediaUrl(event.album.cover || "") });
       return;
     case "album-remove":
       await send(`/api/v1/me/albums/${encodeURIComponent(event.id)}`, "DELETE");

@@ -4,6 +4,7 @@
  * Set `VITE_API_BASE_URL` to an absolute origin in production. Leave it empty
  * in dev so requests stay same-origin and Vite proxies `/api/v1`.
  */
+import { relayMediaUrl } from "@/lib/media-relay";
 
 const ARABIC =
   /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
@@ -146,15 +147,23 @@ export async function searchMusic(query: string): Promise<SearchPayload> {
   return data as SearchPayload;
 }
 
+/**
+ * API download path. Stays on our backend, which applies MEDIA_RELAY_BASE.
+ * A direct http(s) media URL stored here is rewritten instead.
+ */
 export function downloadHref(track: { id: string; downloadPath?: string }): string {
   if (!track.id && !track.downloadPath) return "";
   const path = track.downloadPath || `/api/v1/tracks/${encodeURIComponent(track.id)}/download`;
+  if (/^https?:\/\//i.test(path)) return relayMediaUrl(path);
   return apiUrl(path);
 }
 
 /** Direct CDN stream when the API provided one, otherwise the seekable inline proxy. */
 export function playbackSrc(track: { id: string; streamUrl?: string; downloadPath?: string }): string {
-  if (track.streamUrl) return track.streamUrl;
+  if (track.streamUrl) return relayMediaUrl(track.streamUrl);
+  if (track.downloadPath && /^https?:\/\//i.test(track.downloadPath)) {
+    return relayMediaUrl(track.downloadPath);
+  }
   const href = downloadHref(track);
   if (!href) return "";
   return href.includes("?") ? `${href}&inline=1` : `${href}?inline=1`;
