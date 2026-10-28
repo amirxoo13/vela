@@ -24,9 +24,14 @@
     color: var(--color-paper);
     font-family: var(--font-sans);
   }
+  html {
+    scroll-behavior: smooth;
+  }
   body {
     overflow-x: hidden;
     min-height: 100dvh;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
   input[type="range"] {
     appearance: none;

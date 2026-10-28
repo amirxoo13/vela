@@ -3,6 +3,7 @@ import { pauseMedia, playMedia, seekMedia, mediaDuration } from "@/lib/audio-eng
 import { albumById, queueIds, trackById, useCatalog } from "@/lib/catalog-store";
 import { playlistQueue, useLibrary } from "@/lib/library";
 import { playbackSrc } from "@/lib/music-api";
+import { pauseStageVideo } from "@/lib/stage-video";
 import { startBeat, stopBeat } from "@/lib/tone";
 
 export type ThemeId = "green" | "crimson" | "night" | "ice";
@@ -47,9 +48,11 @@ type State = Persisted & {
   playerOpen: boolean;
   notice: string;
   hydrated: boolean;
+  searchSeed: string;
+  videoAutoplay: boolean;
   setScreen: (screen: Screen) => void;
   openAlbum: (albumId: string) => void;
-  openVideo: (videoId: string, trackId: string) => void;
+  openVideo: (videoId: string) => void;
   setSession: (session: number) => void;
   togglePlay: () => void;
   playTrack: (trackId: string, albumId?: string) => void;
@@ -70,6 +73,7 @@ type State = Persisted & {
   hydrate: () => void;
   setRepeat: (repeat: RepeatMode) => void;
   toggleShuffle: () => void;
+  openSearch: (query: string) => void;
 };
 
 const KEY = "vela-desk";
@@ -116,6 +120,7 @@ function listen(trackId: string) {
 }
 
 function begin(trackId: string, position: number) {
+  pauseStageVideo();
   const track = trackById(trackId);
   startBeat(variantFor(trackId));
   const src = playbackSrc(track);
@@ -142,26 +147,19 @@ export const usePlayer = create<State>((set, get) => ({
   stickers: seedStickers,
   notice: "",
   hydrated: false,
+  searchSeed: "",
+  videoAutoplay: false,
   theme: "green",
   repeat: "all",
   shuffle: false,
   setScreen: (screen) => set({ screen, playerOpen: false }),
+  openSearch: (query) => set({ screen: "search", searchSeed: query, playerOpen: false }),
   openAlbum: (albumId) => set({ albumId, screen: "album", playerOpen: false }),
-  openVideo: (videoId, trackId) => {
-    const track = trackById(trackId);
-    set({
-      videoId,
-      trackId,
-      albumId: track.albumId || get().albumId,
-      position: 0,
-      playing: true,
-      screen: "videos",
-    });
-    listen(trackId);
-    void begin(trackId, 0).catch(() => {
-      stopBeat();
-      set({ playing: false });
-    });
+  openVideo: (videoId) => {
+    stopBeat();
+    pauseMedia();
+    pauseStageVideo();
+    set({ videoId, screen: "videos", playing: false, playerOpen: false, videoAutoplay: true });
   },
   setSession: (session) => set({ session }),
   togglePlay: () => {

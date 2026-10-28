@@ -9,6 +9,7 @@ import {
   Plus,
   Repeat,
   Repeat1,
+  Share2,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -26,9 +27,12 @@ import {
 } from "@/lib/catalog-store";
 import { resolveListenTrack, useLibrary, type HistoryItem, type UserPlaylist } from "@/lib/library";
 import { downloadHref, getData } from "@/lib/music-api";
-import { levels } from "@/lib/tone";
 import { usePlayer, type RepeatMode, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
+import { HomeFeed } from "@/components/home-feed";
+import { VideoPlayer } from "@/components/video-player";
 import { Logo, StickerGlyph } from "@/components/mark";
+import { syncMusicSession } from "@/lib/media-session";
+import { shareAndToast } from "@/lib/share";
 
 const glass = "glass-card rounded-3xl text-paper";
 const kinds: StickerKind[] = ["star", "bolt", "flame", "disc", "spark", "moon", "heart", "drop"];
@@ -156,35 +160,30 @@ function Engine() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  const position = usePlayer((s) => s.position);
   useEffect(() => {
-    if (!("mediaSession" in navigator)) return;
-    const current = track ?? useCatalog.getState().trackMap[trackId];
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: current?.title || "Melobi",
-        artist: current?.artist || "Melobi",
-        album: "Melobi",
-        artwork: current?.cover ? [{ src: current.cover }] : [],
-      });
-      navigator.mediaSession.playbackState = playing ? "playing" : "paused";
-      navigator.mediaSession.setActionHandler("play", () => {
-        if (!usePlayer.getState().playing) usePlayer.getState().togglePlay();
-      });
-      navigator.mediaSession.setActionHandler("pause", () => {
-        if (usePlayer.getState().playing) usePlayer.getState().togglePlay();
-      });
-      navigator.mediaSession.setActionHandler("nexttrack", () => usePlayer.getState().next());
-      navigator.mediaSession.setActionHandler("previoustrack", () => usePlayer.getState().prev());
-      navigator.mediaSession.setActionHandler("seekto", (details) => {
-        if (typeof details.seekTime === "number") {
-          usePlayer.getState().seek(details.seekTime);
-          usePlayer.getState().endScrub();
-        }
-      });
-    } catch {
-      /* metadata artwork can reject a cross-origin URL */
-    }
-  }, [track, trackId, playing]);
+    syncMusicSession(playing, position);
+  }, [track, trackId, playing, position]);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("track");
+    if (!id || !/^\d{1,12}$/.test(id)) return;
+    let cancel = false;
+    void (async () => {
+      await useCatalog.getState().load();
+      if (cancel) return;
+      const ok = await useCatalog.getState().ensureRemote(id);
+      if (cancel) return;
+      if (!ok) {
+        usePlayer.getState().flash("Track not found");
+        return;
+      }
+      usePlayer.getState().playTrack(id);
+      usePlayer.getState().setPlayerOpen(true);
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
   return (
     <audio
       ref={ref}
@@ -228,25 +227,27 @@ function MobileHome() {
             <TourPill />
           </div>
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            <Chip label="Search" onClick={() => setScreen("search")} />
-            <Chip label="Albums" onClick={() => setScreen("albums")} />
-            <Chip label="Videos" onClick={() => setScreen("videos")} />
-            <Chip label="Socials" onClick={() => setScreen("socials")} />
-            <Chip label="History" onClick={() => setScreen("history")} />
-            <Chip label="Playlists" onClick={() => setScreen("playlists")} />
-            <Chip label="Favorites" onClick={() => setScreen("favorites")} />
+            <Chip label="Search" onClick={() => document.getElementById("home-search")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="Albums" onClick={() => document.getElementById("home-albums")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="Videos" onClick={() => document.getElementById("home-videos")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="Podcasts" onClick={() => document.getElementById("home-podcasts")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="Playlists" onClick={() => document.getElementById("home-playlists")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="History" onClick={() => document.getElementById("home-history")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="Favorites" onClick={() => document.getElementById("home-favorites")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
           </div>
           <ThemeSwitch />
           <div className="relative">
             <Hero compact />
             <div className="relative z-30 -mt-40 flex flex-col gap-3">
-              <LiveCard />
+              <div id="home-live" className="scroll-mt-4">
+                <LiveCard />
+              </div>
               <PlayerCard />
               <AlbumsCard />
               <button
                 type="button"
                 onClick={() => setScreen("editor")}
-                className={`${glass} flex items-center justify-between px-4 py-3 text-left`}
+                className={`${glass} flex min-h-11 items-center justify-between px-4 py-3 text-left`}
               >
                 <span>
                   <span className="block text-sm font-extrabold">Create cover art</span>
@@ -259,6 +260,9 @@ function MobileHome() {
           </div>
         </div>
       </ScenePanel>
+      <div className="mt-4 rounded-[28px] bg-panel px-3 py-4 text-paper">
+        <HomeFeed />
+      </div>
     </div>
   );
 }
@@ -333,7 +337,7 @@ function NavText() {
 
 function Chip({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} className="shrink-0 rounded-full bg-ink/25 px-4 py-2 text-sm font-bold">
+    <button type="button" onClick={onClick} className="min-h-11 shrink-0 rounded-full bg-ink/25 px-4 text-sm font-bold">
       {label}
     </button>
   );
@@ -659,9 +663,13 @@ function useNow() {
   return { track, album };
 }
 
-async function playVideo(videoId: string) {
-  const id = await useCatalog.getState().resolveVideoTrack(videoId);
-  if (id) usePlayer.getState().openVideo(videoId, id);
+function playVideo(videoId: string) {
+  const catalog = useCatalog.getState();
+  const video =
+    catalog.videos.find((item) => item.id === videoId) ??
+    catalog.search.videos.find((item) => item.id === videoId);
+  if (video) catalog.rememberVideo(video);
+  usePlayer.getState().openVideo(videoId);
 }
 
 function LiveCard() {
@@ -895,7 +903,7 @@ function NowBar() {
   const pct = track.duration > 0 ? Math.min(100, (position / track.duration) * 100) : 0;
   const cover = track.cover || album.cover;
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3">
+    <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto flex max-w-[520px] items-center gap-3 rounded-2xl bg-glass px-3 py-2 shadow-lg min-[1100px]:max-w-[720px]">
         <button type="button" onClick={() => setPlayerOpen(true)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
           {cover ? (
@@ -910,6 +918,9 @@ function NowBar() {
               <span className="block h-full bg-paper" style={{ width: `${pct}%` }} />
             </span>
           </span>
+        </button>
+        <button type="button" aria-label={`Share ${track.title || "track"}`} onClick={() => void shareAndToast(track)} className="grid size-11 shrink-0 place-items-center rounded-full bg-ink/30">
+          <Share2 className="size-4" />
         </button>
         <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={togglePlay} className="grid size-11 shrink-0 place-items-center rounded-full bg-paper text-ink">
           {playing ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
@@ -937,7 +948,7 @@ function FullPlayer() {
   ].filter(Boolean).join(" · ");
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/75 p-3 min-[1100px]:items-center" onClick={() => setPlayerOpen(false)}>
-      <div className="w-full max-w-[420px] rounded-[28px] bg-panel p-5 text-paper" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Now playing">
+      <div className="w-full max-w-[420px] max-h-[92dvh] overflow-y-auto rounded-[28px] bg-panel p-5 text-paper" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Now playing">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-xs font-extrabold tracking-widest">NOW PLAYING</p>
           <button type="button" onClick={() => setPlayerOpen(false)} className="rounded-full bg-ink/25 px-3 py-1 text-xs font-bold">
@@ -960,6 +971,9 @@ function FullPlayer() {
                 <Download className="size-5" />
               </a>
             ) : null}
+            <button type="button" aria-label={`Share ${track.title || "track"}`} onClick={() => void shareAndToast(track)} className="grid size-11 place-items-center rounded-full bg-ink/25">
+              <Share2 className="size-5" />
+            </button>
             <button type="button" aria-label={on ? "Unlike" : "Like"} onClick={() => toggleLike()} className="grid size-11 place-items-center rounded-full bg-ink/25">
               <Heart className={`size-5 ${on ? "fill-hot text-hot" : ""}`} />
             </button>
@@ -980,6 +994,34 @@ function FullPlayer() {
           </button>
         </div>
         <TransportModes />
+        <div className="mt-3 flex flex-wrap gap-2">
+          {album.id ? (
+            <button
+              type="button"
+              onClick={() => {
+                setPlayerOpen(false);
+                usePlayer.getState().openAlbum(album.id);
+              }}
+              className="min-h-11 rounded-full bg-ink/25 px-4 text-xs font-bold"
+            >
+              Album
+            </button>
+          ) : null}
+          {track.artist ? (
+            <button
+              type="button"
+              onClick={() => {
+                setPlayerOpen(false);
+                usePlayer.getState().openSearch(track.artist);
+              }}
+              className="min-h-11 rounded-full bg-ink/25 px-4 text-xs font-bold"
+            >
+              Artist
+            </button>
+          ) : null}
+        </div>
+        <SleepTimer />
+        <UpNext trackId={track.id} albumId={album.id || track.albumId} />
         <SaveToPlaylist trackId={track.id} />
         <p className="mt-4 text-center text-xs text-paper/75">{detail || "Now playing"}</p>
       </div>
@@ -1138,6 +1180,9 @@ function TrackRow({
       <span className="w-5 text-sm tabular-nums text-paper/70">{index + 1}</span>
       <span className="min-w-0 flex-1 truncate text-left font-bold">{track.title}</span>
       <span className="text-xs tabular-nums text-paper/75">{fmt(track.duration)}</span>
+      <button type="button" aria-label={`Share ${track.title}`} onClick={() => void shareAndToast(track)} className="grid size-11 place-items-center">
+        <Share2 className="size-4" />
+      </button>
       <DownloadLink track={track} />
       <button type="button" aria-label="Like track" onClick={onLike} className="grid size-11 place-items-center">
         <Heart className={`size-4 ${liked ? "fill-hot text-hot" : ""}`} />
@@ -1147,7 +1192,8 @@ function TrackRow({
 }
 
 function SearchPage() {
-  const [q, setQ] = useState("");
+  const seed = usePlayer((s) => s.searchSeed);
+  const [q, setQ] = useState(seed);
   const search = useCatalog((s) => s.search);
   const trackMap = useCatalog((s) => s.trackMap);
   const trackId = usePlayer((s) => s.trackId);
@@ -1158,6 +1204,9 @@ function SearchPage() {
   const toggleLike = usePlayer((s) => s.toggleLike);
   const openAlbum = usePlayer((s) => s.openAlbum);
   const searchFor = useCatalog((s) => s.searchFor);
+  useEffect(() => {
+    if (seed) setQ(seed);
+  }, [seed]);
   useEffect(() => {
     const handle = window.setTimeout(() => {
       void searchFor(q);
@@ -1230,47 +1279,46 @@ function SearchPage() {
 
 function VideosPage() {
   const videoId = usePlayer((s) => s.videoId);
-  const playing = usePlayer((s) => s.playing);
-  const togglePlay = usePlayer((s) => s.togglePlay);
+  const autoPlay = usePlayer((s) => s.videoAutoplay);
+  const ready = useCatalog((s) => s.ready);
+  const error = useCatalog((s) => s.error);
+  const reload = useCatalog((s) => s.reload);
   const videos = useCatalog((s) => s.videos);
   const active = videos.find((video) => video.id === videoId) ?? videos[0];
   return (
     <div>
-      <div className="relative overflow-hidden rounded-3xl">
-        {active?.image ? (
-          <img src={active.image} alt="" className="aspect-video w-full object-cover" />
-        ) : (
-          <div className="aspect-video w-full bg-ink/30" />
-        )}
-        <div className="absolute inset-0 bg-ink/35" />
-        <div className="absolute inset-x-4 bottom-4">
-          <Bars />
-          <p className="mt-2 font-extrabold">{active?.title ?? ""}</p>
-          <p className="text-xs text-paper/80">{active?.meta ?? ""}</p>
+      {!ready ? <div className="aspect-video w-full animate-pulse rounded-3xl bg-ink/20" /> : null}
+      {ready && error && !videos.length ? (
+        <div className="rounded-3xl bg-ink/15 p-4">
+          <p className="text-sm font-extrabold">{error}</p>
+          <button type="button" onClick={() => void reload()} className="mt-3 min-h-11 rounded-full bg-paper px-4 text-sm font-extrabold text-ink">
+            Try again
+          </button>
         </div>
-        <button
-          type="button"
-          aria-label={playing ? "Pause session" : "Play session"}
-          onClick={() => {
-            if (playing) togglePlay();
-            else if (active) void playVideo(active.id);
-          }}
-          className="absolute left-1/2 top-1/3 grid size-14 -translate-x-1/2 place-items-center rounded-full bg-paper text-ink"
-        >
-          {playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
-        </button>
-      </div>
+      ) : null}
+      {ready && !error && !videos.length ? <p className="text-sm text-paper/80">No videos yet.</p> : null}
+      {active ? (
+        <>
+          <VideoPlayer video={active} autoPlay={autoPlay && active.id === videoId} />
+          <p className="mt-3 font-extrabold">{active.title}</p>
+          <p className="text-xs text-paper/80">{active.meta}</p>
+        </>
+      ) : null}
       <ul className="mt-3 flex flex-col gap-2">
         {videos.map((video) => (
           <li key={video.id}>
-            <button type="button" onClick={() => void playVideo(video.id)} className={`flex w-full items-center gap-3 rounded-2xl p-2 text-left ${video.id === active?.id ? "bg-ink/25" : "bg-ink/10"}`}>
+            <button
+              type="button"
+              onClick={() => playVideo(video.id)}
+              className={`flex min-h-11 w-full items-center gap-3 rounded-2xl p-2 text-left ${video.id === active?.id ? "bg-ink/25" : "bg-ink/10"}`}
+            >
               {video.image ? (
                 <img src={video.image} alt="" className="size-16 rounded-xl object-cover" />
               ) : (
                 <span className="size-16 shrink-0 rounded-xl bg-ink/30" />
               )}
-              <span>
-                <span className="block font-extrabold">{video.title}</span>
+              <span className="min-w-0">
+                <span className="block truncate font-extrabold">{video.title}</span>
                 <span className="text-xs text-paper/75">{video.meta}</span>
               </span>
             </button>
@@ -1281,27 +1329,11 @@ function VideosPage() {
   );
 }
 
-function Bars() {
-  const playing = usePlayer((s) => s.playing);
-  const [vals, setVals] = useState<number[]>(() => Array.from({ length: 22 }, () => 0.08));
-  useEffect(() => {
-    if (!playing) return;
-    const id = window.setInterval(() => setVals(levels()), 90);
-    return () => window.clearInterval(id);
-  }, [playing]);
-  return (
-    <div className="flex h-14 items-end gap-1" aria-hidden>
-      {vals.map((v, i) => (
-        <span key={i} className="flex-1 rounded-full bg-paper" style={{ height: `${Math.round(v * 100)}%` }} />
-      ))}
-    </div>
-  );
-}
-
 function SocialsPage() {
   const saved = usePlayer((s) => s.posts);
   const togglePost = usePlayer((s) => s.togglePost);
   const stories = useCatalog((s) => s.stories);
+  if (!stories.length) return <p className="text-sm text-paper/80">No artists yet.</p>;
   return (
     <div className="grid gap-3 min-[1100px]:grid-cols-3">
       {stories.map((story) => (
@@ -1448,6 +1480,61 @@ function CharacterWait() {
           className={`h-64 w-auto max-w-none -translate-y-2 object-cover object-top ${reduce ? "" : "idle-sway"}`}
         />
       </div>
+    </div>
+  );
+}
+
+function SleepTimer() {
+  const [minutes, setMinutes] = useState(0);
+  useEffect(() => {
+    if (!minutes) return;
+    const id = window.setTimeout(() => {
+      if (usePlayer.getState().playing) usePlayer.getState().togglePlay();
+      usePlayer.getState().flash("Sleep timer");
+      setMinutes(0);
+    }, minutes * 60 * 1000);
+    return () => window.clearTimeout(id);
+  }, [minutes]);
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <span className="text-xs font-extrabold">Sleep</span>
+      {[0, 15, 30, 60].map((value) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={minutes === value}
+          onClick={() => setMinutes(value)}
+          className={`min-h-11 rounded-full px-3 text-xs font-bold ${minutes === value ? "bg-paper text-ink" : "bg-ink/25"}`}
+        >
+          {value === 0 ? "Off" : `${value}m`}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function UpNext({ trackId, albumId }: { trackId: string; albumId: string }) {
+  const membership = useCatalog((s) => s.membership);
+  const playOrder = useCatalog((s) => s.playOrder);
+  const trackMap = useCatalog((s) => s.trackMap);
+  const playTrack = usePlayer((s) => s.playTrack);
+  const ids = membership[albumId]?.includes(trackId) ? membership[albumId] : playOrder;
+  const start = ids.indexOf(trackId);
+  const upcoming = (start >= 0 ? ids.slice(start + 1, start + 4) : []).map((id) => trackMap[id]).filter((track): track is Track => !!track);
+  if (!upcoming.length) return null;
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-extrabold tracking-widest">UP NEXT</p>
+      <ul className="mt-2 flex flex-col gap-1">
+        {upcoming.map((track) => (
+          <li key={track.id}>
+            <button type="button" onClick={() => playTrack(track.id, albumId)} className="flex min-h-11 w-full items-center gap-2 rounded-2xl bg-ink/15 px-3 text-left">
+              <span className="min-w-0 flex-1 truncate text-sm font-bold">{track.title}</span>
+              <span className="truncate text-xs text-paper/70">{track.artist}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import {
   english,
   getData,
   getHome,
+  getTrack,
   getTrackList,
   isApiTrack,
   searchMusic,
@@ -43,7 +44,10 @@ export type Video = {
   meta: string;
   image: string;
   trackId: string;
+  /** Progressive MP4 when the feed has one. */
   mediaUrl: string;
+  /** HLS playlist when the feed has one. */
+  hlsUrl: string;
 };
 
 export type LiveDate = {
@@ -84,10 +88,14 @@ type State = Draft & {
   stories: Story[];
   search: SearchView;
   ready: boolean;
+  error: string;
   load: () => Promise<void>;
+  reload: () => Promise<void>;
   loadAlbum: (id: string) => Promise<void>;
   searchFor: (query: string) => Promise<void>;
   resolveVideoTrack: (videoId: string) => Promise<string>;
+  ensureRemote: (id: string) => Promise<boolean>;
+  rememberVideo: (video: Video) => void;
   noteDuration: (id: string, seconds: number) => void;
   ensureTrack: (track: Track) => void;
 };
@@ -283,9 +291,15 @@ function videoFrom(value: unknown, fallbackMeta: string): Video | null {
     id: String(row.id),
     title,
     meta: english(row.artist) || fallbackMeta,
-    image: httpUrl(row.photo) || httpUrl(row.thumbnail) || httpUrl(row.photo_player),
+    image: httpUrl(row.photo_player) || httpUrl(row.photo) || httpUrl(row.thumbnail),
     trackId: mp3?.id != null ? String(mp3.id) : "",
-    mediaUrl: httpUrl(row.link) || httpUrl(row.lq_link) || httpUrl(row.high_web) || httpUrl(row.low_web),
+    mediaUrl:
+      httpUrl(row.low_web) ||
+      httpUrl(row.link) ||
+      httpUrl(row.high_web) ||
+      httpUrl(row.lq_link) ||
+      httpUrl(row.hq_link),
+    hlsUrl: httpUrl(row.hls),
   };
 }
 
@@ -511,8 +525,9 @@ export const useCatalog = create<State>((set, get) => ({
   stories: [],
   search: emptySearch,
   ready: false,
+  error: "",
   load: () => {
-    if (get().ready) return Promise.resolve();
+    if (get().ready && !get().error) return Promise.resolve();
     if (!loadPromise) {
       loadPromise = ingest().finally(() => {
         if (!useCatalog.getState().ready) loadPromise = null;
@@ -584,8 +599,22 @@ export const useCatalog = create<State>((set, get) => ({
       const stories = buckets.artists.map(storyFromArtist).filter((story): story is Story => !!story);
       const live = asArray(value(events, null)).map(eventFrom).filter((item): item is LiveDate => !!item);
 
-      set({ ...view(draft), videos, stories, events: live, ready: true });
+      const homeOk = home.status === "fulfilled";
+      const trendOk = trending.status === "fulfilled";
+      set({
+        ...view(draft),
+        videos,
+        stories,
+        events: live,
+        ready: true,
+        error: !homeOk && !trendOk ? "Couldn't load music" : "",
+      });
     }
+  },
+  reload: () => {
+    loadPromise = null;
+    set({ ready: false, error: "" });
+    return get().load();
   },
   loadAlbum: async (id) => {
     const album = get().albumMap[id];
@@ -762,6 +791,28 @@ export const useCatalog = create<State>((set, get) => ({
       return view(draft);
     });
     return id;
+  },
+  ensureRemote: async (id) => {
+    const known = get().trackMap[id];
+    if (known?.streamUrl || known?.downloadPath) return true;
+    try {
+      const raw = await getTrack(id);
+      const albumId = raw.albumId != null ? `album:${raw.albumId}` : "trending";
+      const track = fromApi(raw, albumId);
+      if (!track) return false;
+      set((state) => {
+        const draft = fromState(state);
+        putTrack(draft, track, track.albumId, false);
+        return view(draft);
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  rememberVideo: (video) => {
+    if (!video.id || get().videos.some((item) => item.id === video.id)) return;
+    set({ videos: [video, ...get().videos] });
   },
   ensureTrack: (track) => {
     if (!track.id) return;
