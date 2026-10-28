@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { pauseMedia, playMedia, seekMedia, mediaDuration } from "@/lib/audio-engine";
 import { albumById, queueIds, trackById, useCatalog } from "@/lib/catalog-store";
-import { playlistQueue, useLibrary } from "@/lib/library";
+import { playlistQueue, trackSnap, useLibrary } from "@/lib/library";
 import { playbackSrc } from "@/lib/music-api";
+import { emitSync } from "@/lib/sync-events";
 import { pauseStageVideo } from "@/lib/stage-video";
 import { startBeat, stopBeat } from "@/lib/tone";
 
@@ -20,7 +21,10 @@ export type Screen =
   | "editor"
   | "history"
   | "playlists"
-  | "favorites";
+  | "favorites"
+  | "profile"
+  | "following"
+  | "saved";
 
 export type Sticker = { uid: string; kind: StickerKind; x: number; y: number };
 
@@ -264,9 +268,13 @@ export const usePlayer = create<State>((set, get) => ({
   endScrub: () => set({ scrubbing: false }),
   toggleLike: (trackId) => {
     const id = trackId ?? get().trackId;
-    const liked = { ...get().liked, [id]: !get().liked[id] };
+    if (!id) return;
+    const on = !get().liked[id];
+    const liked = { ...get().liked, [id]: on };
     set({ liked });
     persist(snapshot(get()));
+    if (on) emitSync({ type: "like", track: trackSnap(id) });
+    else emitSync({ type: "unlike", id });
   },
   toggleHold: (id) => {
     const holds = { ...get().holds, [id]: !get().holds[id] };
@@ -274,9 +282,12 @@ export const usePlayer = create<State>((set, get) => ({
     persist(snapshot(get()));
   },
   togglePost: (id) => {
-    const posts = { ...get().posts, [id]: !get().posts[id] };
+    const on = !get().posts[id];
+    const posts = { ...get().posts, [id]: on };
     set({ posts });
     persist(snapshot(get()));
+    const story = useCatalog.getState().stories.find((item) => item.id === id);
+    useLibrary.getState().setFollow({ id, name: story?.title || "Artist", image: story?.image || "" }, on);
   },
   setPlayerOpen: (playerOpen) => set({ playerOpen }),
   addSticker: (kind) => {
@@ -301,6 +312,7 @@ export const usePlayer = create<State>((set, get) => ({
   setTheme: (theme) => {
     set({ theme });
     persist(snapshot(get()));
+    emitSync({ type: "theme", theme });
   },
   setRepeat: (repeat) => {
     set({ repeat });

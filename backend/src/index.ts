@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import { closeAccounts, openAccounts } from '../lib/accounts.mjs';
 import { config, getToken } from './config.js';
 import { ApiError } from './errors.js';
 import { registerRoutes } from './routes.js';
@@ -7,18 +8,21 @@ import { registerRoutes } from './routes.js';
 const app = Fastify({
   logger: {
     level: config.logLevel,
-    // Never log request headers or anything that could contain secrets.
+    // Never log request headers, bodies, or anything that could contain secrets.
     serializers: {
-      req: (r) => ({ method: r.method, url: r.url, range: r.headers?.range }),
+      req: (r) => ({ method: r.method, url: r.url.split('?')[0], range: r.headers?.range }),
       res: (r) => ({ statusCode: r.statusCode }),
     },
   },
   trustProxy: true,
+  bodyLimit: 2 * 1024 * 1024,
 });
 
 await app.register(cors, {
   origin: true,
-  methods: ['GET', 'HEAD', 'OPTIONS'],
+  credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['content-type', 'accept', 'range', 'if-range'],
   exposedHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges', 'Content-Disposition'],
 });
 
@@ -38,7 +42,13 @@ await registerRoutes(app);
 
 if (!getToken()) app.log.warn('USER_TOKEN is not set; upstream calls will fail with SERVER_MISCONFIGURED');
 
-const shutdown = async () => { await app.close(); process.exit(0); };
+openAccounts();
+
+const shutdown = async () => {
+  await app.close();
+  closeAccounts();
+  process.exit(0);
+};
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 

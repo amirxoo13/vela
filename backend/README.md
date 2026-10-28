@@ -33,7 +33,48 @@ Stop the background server: `kill $(cat server.pid)`.
 | `ITEM_CACHE_TTL_SECONDS` | 900 | Cache TTL for single items (track, album, ...); download/seek requests reuse it |
 | `CACHE_MAX_ENTRIES` | 500 | Max cache entries |
 | `LOG_LEVEL` | info | Fastify/pino log level |
-| `USER_TOKEN` | — | **Environment only.** Sent to upstream as `one-api-token` header |
+| `USER_TOKEN` | — | **Environment only.** Sent to upstream as `one-api-token` header. Never written to disk or logs |
+| `MELOBI_DATA_DIR` | `/opt/melobi/data` if writable, else `backend/data` | SQLite file, avatars, and generated session secret. **Set `/opt/melobi/data` in production** so a redeploy of the app folder does not wipe accounts |
+| `SESSION_SECRET` | random file in the data dir | HMAC key for session cookies. Set it when more than one process must accept the same cookies. Rotating it signs everyone out |
+| `COOKIE_SECURE` | auto | `1` forces the Secure flag, `0` disables it. Unset turns it on only when `X-Forwarded-Proto` is `https` |
+
+## Accounts and library
+
+Accounts are stored in SQLite (`melobi.db` inside `MELOBI_DATA_DIR`), not in the browser and not in Postgres. On startup the process applies any new files in `backend/migrations/` once and records them in `schema_migrations`. There is no separate migrate command. The first migration is `0001_accounts.sql` (users, sessions, login attempts, likes, playlists, playlist tracks, history, follows, saved albums, settings).
+
+Passwords are scrypt hashes. The session cookie is `melobi_session`: httpOnly, SameSite=Lax, path `/`. The database stores an HMAC of the token, not the token. Login is limited to 8 failures per 15 minutes per IP and per email. Signup is limited to 5 per 15 minutes per IP.
+
+The browser must call the API on the **same site** as the page (Caddy serving the app and `/api/v1` on `https://melobi.amirxo.ir`, or Vite's `/api/v1` proxy). Leave `VITE_API_BASE_URL` empty in that setup so the session cookie stays first-party. Avatars are files under `$MELOBI_DATA_DIR/avatars/`.
+
+### Deploy checklist
+
+1. Create `/opt/melobi/data` and give the service user write access, or set `MELOBI_DATA_DIR` to another directory **outside** the app folder.
+2. Put `USER_TOKEN` in the environment only. Optionally set `SESSION_SECRET` in that same env file. Do not commit either.
+3. Leave `COOKIE_SECURE` unset when Caddy sends `X-Forwarded-Proto: https`.
+4. From `backend/`: `npm install`, `npm run build`, `npm start` (listens on `127.0.0.1` or `HOST`, port `8787`).
+5. Build the frontend with an empty `VITE_API_BASE_URL` and point Caddy at the preview, with `/api/v1` reaching this process.
+6. Restart the API after pulling a release so new SQL files apply. Existing `melobi.db` is kept.
+
+### Account endpoints
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/v1/auth/signup` | `{ email, password, displayName? }` sets the session cookie |
+| POST | `/api/v1/auth/login` | `{ email, password }` |
+| POST | `/api/v1/auth/logout` | clears the cookie |
+| GET | `/api/v1/auth/me` | `{ data: { user } }` or `{ data: null }` |
+| PATCH | `/api/v1/auth/me` | `{ displayName?, avatarPreset?, avatarData? }` |
+| POST | `/api/v1/auth/password` | `{ currentPassword, newPassword }` |
+| DELETE | `/api/v1/auth/me` | `{ password }` deletes the user and library |
+| GET | `/api/v1/me/library` | likes, playlists, history, follows, albums, theme |
+| POST | `/api/v1/me/library/import` | merges a guest library once (`library_imported`) |
+| PUT / DELETE | `/api/v1/me/likes` | save or remove a liked song |
+| POST / PATCH / DELETE | `/api/v1/me/playlists` | create, rename, replace track order, delete |
+| POST | `/api/v1/me/history` | remember a play |
+| PUT / DELETE | `/api/v1/me/follows` | follow or unfollow an artist |
+| PUT / DELETE | `/api/v1/me/albums` | save or remove an album |
+| PATCH | `/api/v1/me/settings` | `{ theme }` one of `green`, `crimson`, `night`, `ice` |
+| GET | `/api/v1/avatars/:userId` | uploaded avatar bytes |
 
 ## Conventions
 

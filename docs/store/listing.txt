@@ -1,0 +1,18 @@
+Melobi — short description
+Stream songs, albums, videos, and podcasts, and keep your own library.
+
+Melobi — full description
+Melobi is a music player for everyday listening. Browse trending songs, albums, playlists, videos, and podcasts, then play them with a full player: shuffle, repeat, sleep timer, and a mini player that stays with you.
+
+Create a free account with your email to keep a personal profile and library:
+- Display name and avatar
+- Liked songs
+- Playlists you can create, rename, reorder, and delete
+- Recently played
+- Artists you follow
+- Albums you save
+- Your color theme
+
+Guests can browse and play without an account. Sign in when you want those saves to stay with you. The first time you sign in, the library on this device is copied into the account. Each account has its own library.
+
+Melobi includes a profile, a privacy policy, and terms of use. Playback needs a network connection. Version 1.1.0.

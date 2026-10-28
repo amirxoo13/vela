@@ -28,9 +28,11 @@ import {
 import { resolveListenTrack, useLibrary, type HistoryItem, type UserPlaylist } from "@/lib/library";
 import { downloadHref, getData } from "@/lib/music-api";
 import { usePlayer, type RepeatMode, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
+import { FollowingScreen, OfflineGate, ProfileScreen, SavedAlbumsScreen, SignInSheet } from "@/components/account-ui";
 import { HomeFeed } from "@/components/home-feed";
 import { VideoPlayer } from "@/components/video-player";
 import { Logo, StickerGlyph } from "@/components/mark";
+import { useAccount } from "@/lib/account-store";
 import { syncMusicSession } from "@/lib/media-session";
 import { shareAndToast } from "@/lib/share";
 
@@ -84,6 +86,8 @@ export function VelaApp() {
       ) : null}
       {screen !== "home" ? <NowBar /> : null}
       {playerOpen && <FullPlayer />}
+      <SignInSheet />
+      <OfflineGate />
       {notice && (
         <p className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-paper px-4 py-2 text-sm font-bold text-ink">
           {notice}
@@ -114,6 +118,7 @@ function Engine() {
     });
     usePlayer.getState().hydrate();
     useLibrary.getState().hydrate();
+    void useAccount.getState().boot();
     void useCatalog.getState().load().then(() => {
       const catalog = useCatalog.getState();
       const player = usePlayer.getState();
@@ -234,6 +239,7 @@ function MobileHome() {
             <Chip label="Playlists" onClick={() => document.getElementById("home-playlists")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
             <Chip label="History" onClick={() => document.getElementById("home-history")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
             <Chip label="Favorites" onClick={() => document.getElementById("home-favorites")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            <Chip label="Profile" onClick={() => setScreen("profile")} />
           </div>
           <ThemeSwitch />
           <div className="relative">
@@ -331,6 +337,7 @@ function NavText() {
       <button type="button" onClick={() => setScreen("history")}>History</button>
       <button type="button" onClick={() => setScreen("playlists")}>Playlists</button>
       <button type="button" onClick={() => setScreen("favorites")}>Favorites</button>
+      <button type="button" onClick={() => setScreen("profile")}>Profile</button>
     </nav>
   );
 }
@@ -1044,8 +1051,11 @@ function Section() {
     screen === "history" ? "History" :
     screen === "playlists" ? "Playlists" :
     screen === "favorites" ? "Favorites" :
+    screen === "profile" ? "Profile" :
+    screen === "following" ? "Artists" :
+    screen === "saved" ? "Albums" :
     "Cover lab";
-  const browsing = screen === "search" || screen === "albums" || screen === "album" || screen === "history" || screen === "playlists" || screen === "favorites";
+  const browsing = screen === "search" || screen === "albums" || screen === "album" || screen === "history" || screen === "playlists" || screen === "favorites" || screen === "profile" || screen === "following" || screen === "saved";
   return (
     <div className="mx-auto w-full max-w-[480px] px-3 pb-28 pt-3 min-[1100px]:max-w-[1100px] min-[1100px]:px-8">
       <div className="min-h-[calc(100dvh-6rem)] rounded-[28px] bg-panel p-4">
@@ -1067,6 +1077,9 @@ function Section() {
         {screen === "history" && <HistoryPage />}
         {screen === "playlists" && <PlaylistsPage />}
         {screen === "favorites" && <FavoritesPage />}
+        {screen === "profile" && <ProfileScreen />}
+        {screen === "following" && <FollowingScreen />}
+        {screen === "saved" && <SavedAlbumsScreen />}
       </div>
     </div>
   );
@@ -1098,6 +1111,27 @@ function AlbumsPage() {
   );
 }
 
+function SaveAlbumButton() {
+  const albumId = usePlayer((s) => s.albumId);
+  const album = useCatalog((s) => s.albumMap[albumId]);
+  const saved = useLibrary((s) => s.savedAlbums.some((item) => item.id === albumId));
+  if (!album?.id) return null;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        useLibrary.getState().setSavedAlbum(
+          { id: album.id, title: album.title, artist: album.artist, cover: album.cover, year: album.year },
+          !saved,
+        )
+      }
+      className="mt-2 min-h-11 rounded-full bg-ink/25 px-4 text-sm font-bold"
+    >
+      {saved ? "Saved album" : "Save album"}
+    </button>
+  );
+}
+
 function AlbumPage() {
   const albumId = usePlayer((s) => s.albumId);
   const trackId = usePlayer((s) => s.trackId);
@@ -1110,6 +1144,7 @@ function AlbumPage() {
   const ids = useCatalog((s) => s.membership[albumId]);
   const trackMap = useCatalog((s) => s.trackMap);
   const list = (ids ?? []).map((id) => trackMap[id]).filter((track): track is Track => !!track);
+  const loaded = useCatalog((s) => !!s.loaded[albumId]);
   useEffect(() => {
     if (albumId) void useCatalog.getState().loadAlbum(albumId);
   }, [albumId]);
@@ -1136,7 +1171,15 @@ function AlbumPage() {
         >
           <Play className="size-4 fill-current" /> Play album
         </button>
+        <SaveAlbumButton />
       </div>
+      {!list.length && album.kind !== "chart" && album.remoteId && !loaded ? (
+        <div className="mt-4 flex flex-col gap-2" aria-hidden>
+          {Array.from({ length: 5 }, (_, index) => (
+            <div key={index} className="h-12 animate-pulse rounded-2xl bg-ink/15" />
+          ))}
+        </div>
+      ) : null}
       <ol className="mt-4 flex flex-col gap-1 min-[1100px]:mt-0">
         {list.map((track, index) => (
           <TrackRow
@@ -1651,7 +1694,7 @@ function FavoritesPage() {
   const tracks = ids
     .map((id) => trackMap[id] ?? resolveListenTrack(id))
     .filter((track): track is Track => !!track?.id);
-  if (!tracks.length) return <p className="text-sm text-paper/80">Hearts you tap are kept on this device.</p>;
+  if (!tracks.length) return <p className="text-sm text-paper/80">Songs you like show up here.</p>;
   return (
     <ol className="flex flex-col gap-1">
       {tracks.map((track, index) => (

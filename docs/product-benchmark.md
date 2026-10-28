@@ -44,7 +44,7 @@ English UI only. The stage character, themes, glass, and type stay as they are.
 | Action | Typical apps | Melobi |
 |---|---|---|
 | Popular tracks, albums, videos | Yes | No artist-discography endpoint. Search by name is the stand-in |
-| Follow | Yes | Save on the artist card (this device) |
+| Follow | Yes | Save on the artist card. Signed-in follows stay on the account |
 | Radio / similar artists | Spotify, YouTube | Not in the payload |
 
 ## Playlist
@@ -52,8 +52,8 @@ English UI only. The stage character, themes, glass, and type stay as they are.
 | Action | Typical apps | Melobi |
 |---|---|---|
 | Catalog playlists | Yes | Radio Javan playlists from home and `/playlists/:id` |
-| Your playlists: create, rename, reorder, remove | Spotify, Apple | Yes, stored on this device |
-| Collaborative / public share of a user playlist | Spotify | No accounts, so no shared user playlists |
+| Your playlists: create, rename, reorder, remove | Spotify, Apple | Yes. On the account when signed in, on this device for a guest |
+| Collaborative / public share of a user playlist | Spotify | Each account keeps its own playlists |
 | Download whole playlist | Spotify | Per-track download only |
 
 ## Videos
@@ -105,9 +105,9 @@ English UI only. The stage character, themes, glass, and type stay as they are.
 
 | Action | Typical apps | Melobi |
 |---|---|---|
-| Liked songs | Yes | Favorites, this device |
-| Recently played | Yes | History, newest first |
-| Your playlists | Yes | Yes |
+| Liked songs | Yes | Favorites. The account library when signed in |
+| Recently played | Yes | History, newest first, synced with the account |
+| Your playlists | Yes | Yes, per account |
 | Made-for-you mixes | Spotify | No private listening profile in the API |
 | Downloaded library | Spotify, YouTube | Each download is a file save, not an offline library |
 
@@ -118,12 +118,12 @@ English UI only. The stage character, themes, glass, and type stay as they are.
 | Theme | Some | Four themes on the home |
 | Audio quality | Spotify, Apple | Stream is the CDN file the API returns. No quality picker |
 | Explicit content | Yes | `explicit` exists on tracks; no account gate |
-| Account, devices, subscription | All four | No Melobi accounts in this app |
+| Account, devices, subscription | All four | Email account: profile, password, sign out, delete. No subscription |
 | Equalizer, crossfade | Spotify, Apple | Not in the API |
 | Storage / downloads manager | Yes | Not stored as a library |
 
 ## What we do not invent
 
 - Lyrics, credits, similar-artist radio, and private mixes: the payload has no text or graph for them.
-- A shared account library: favorites, history, and user playlists stay on the device.
+- A shared public playlist between two people. Each account has its own library.
 - Radio Javan `share_link` (`rj.app`) is a different app. Melobi shares `/?track=<id>` so the WebView and the site open the same song.

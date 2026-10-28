@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { accountPath, dispatchAccount } from "../backend/lib/accounts.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const read = (name) => JSON.parse(readFileSync(join(root, name), "utf8"));
@@ -179,9 +180,73 @@ async function proxyMedia(req, res, track, inline) {
   Readable.fromWeb(upstream.body).pipe(res);
 }
 
+function sendAccount(res, result) {
+  if (result.cookies) {
+    for (const cookie of result.cookies) res.appendHeader("set-cookie", cookie);
+  }
+  if (result.headers) {
+    for (const [key, value] of Object.entries(result.headers)) res.setHeader(key, value);
+  }
+  if (result.status === 204) {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  if (result.raw) {
+    res.statusCode = result.status;
+    res.setHeader("content-length", result.raw.length);
+    res.end(result.raw);
+    return;
+  }
+  const payload = JSON.stringify(result.json ?? null);
+  res.writeHead(result.status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(payload),
+    "cache-control": "no-store",
+  });
+  res.end(payload);
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 2 * 1024 * 1024) return { error: true };
+    chunks.push(chunk);
+  }
+  if (!size) return { body: undefined };
+  try {
+    return { body: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+  } catch {
+    return { error: true };
+  }
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", "http://fixture.local");
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (accountPath(path)) {
+      const loaded = req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS" ? { body: undefined } : await readJsonBody(req);
+      if (loaded.error) {
+        sendJson(res, 400, { error: { status: 400, code: "INVALID_BODY", message: "Expected JSON" } });
+        return;
+      }
+      const forwarded = req.headers["x-forwarded-for"];
+      const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim() || req.socket.remoteAddress || "local";
+      const result = await dispatchAccount({
+        method: req.method || "GET",
+        path,
+        headers: req.headers,
+        body: loaded.body,
+        ip,
+      });
+      if (result) {
+        sendAccount(res, result);
+        return;
+      }
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "access-control-allow-origin": "*",
@@ -196,7 +261,6 @@ const server = createServer(async (req, res) => {
       sendJson(res, 404, { error: { status: 404, code: "ROUTE_NOT_FOUND", message: "Route not found" } });
       return;
     }
-    const path = url.pathname.replace(/\/+$/, "") || "/";
 
     if (path === "/health") {
       sendJson(res, 200, {

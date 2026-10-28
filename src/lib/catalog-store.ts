@@ -7,6 +7,7 @@ import {
   getTrack,
   getTrackList,
   isApiTrack,
+  MusicApiError,
   searchMusic,
   type ApiTrack,
 } from "@/lib/music-api";
@@ -601,13 +602,16 @@ export const useCatalog = create<State>((set, get) => ({
 
       const homeOk = home.status === "fulfilled";
       const trendOk = trending.status === "fulfilled";
+      const offline =
+        (home.status === "rejected" && home.reason instanceof MusicApiError && home.reason.code === "OFFLINE") ||
+        (trending.status === "rejected" && trending.reason instanceof MusicApiError && trending.reason.code === "OFFLINE");
       set({
         ...view(draft),
         videos,
         stories,
         events: live,
         ready: true,
-        error: !homeOk && !trendOk ? "Couldn't load music" : "",
+        error: !homeOk && !trendOk ? (offline ? "No connection. Check your network and try again." : "Couldn't load music") : "",
       });
     }
   },

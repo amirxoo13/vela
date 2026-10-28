@@ -102,7 +102,12 @@ export function collectTracks(value: unknown): ApiTrack[] {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(apiUrl(path), { headers: { accept: "application/json" } });
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(path), { headers: { accept: "application/json" } });
+  } catch {
+    throw new MusicApiError(0, "OFFLINE", "No connection");
+  }
   const body = (await response.json().catch(() => null)) as {
     error?: { code?: string; message?: string };
   } | null;

@@ -252,9 +252,14 @@ export function HomeFeed() {
             ))}
           </Rail>
         ) : (
-          <p className="text-sm text-paper/75">Hearts you tap are kept on this device.</p>
+          <p className="text-sm text-paper/75">Songs you like show up here.</p>
         )}
       </Section>
+      <nav className="flex flex-wrap gap-x-4 gap-y-1 pt-2 text-xs font-bold text-paper/70" aria-label="About Melobi">
+        <a href="/privacy" className="min-h-11 py-2">Privacy</a>
+        <a href="/terms" className="min-h-11 py-2">Terms</a>
+        <a href="/about" className="min-h-11 py-2">About</a>
+      </nav>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { TtlCache } from './cache.js';
 import { config } from './config.js';
 import { ApiError } from './errors.js';
 import { deepNormalize, extractTrackList, isTrackLike, normalizeTrack, type Track } from './normalize.js';
+import { registerAccountRoutes } from './accounts.js';
 import { proxyTrackAudio } from './media.js';
 import { upstreamGet } from './upstream.js';
 
@@ -44,6 +45,8 @@ export async function registerRoutes(app: FastifyInstance) {
   }));
 
   app.register(async (api) => {
+    registerAccountRoutes(api);
+
     api.get('/home', async () => {
       const r = await cached('/home', config.listTtlMs);
       return { data: deepNormalize(r.value), meta: { cached: r.cached } };

@@ -5,6 +5,8 @@ node_modules
 artifacts
 attachments
 screenshots
+!docs/store/screenshots/
+!docs/store/screenshots/**
 dist
 .output
 .env
