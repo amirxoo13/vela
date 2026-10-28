@@ -1,14 +1,10 @@
 import type { StickerKind } from "@/lib/player-store";
 
-export function Logo({ onClick, light = true }: { onClick?: () => void; light?: boolean }) {
+export function Logo({ onClick }: { onClick?: () => void }) {
   return (
-    <button type="button" onClick={onClick} className="flex items-center gap-2">
-      <span className={`grid size-9 shrink-0 place-items-center rounded-full ${light ? "bg-paper text-panel" : "bg-panel text-paper"}`}>
-        <svg viewBox="0 0 32 32" className="size-5" aria-hidden>
-          <path fill="currentColor" d="M16 2.5 18.7 12 28.5 14.6 18.7 17.3 16 26.8 13.3 17.3 3.5 14.6 13.3 12Z" />
-        </svg>
-      </span>
-      <span className="font-display text-2xl leading-none tracking-tight">VELA</span>
+    <button type="button" onClick={onClick} aria-label="Melobi" className="flex items-center gap-2">
+      <img src="/brand/mark.png" alt="" className="size-9 shrink-0 object-contain" />
+      <img src="/brand/wordmark.png" alt="" className="h-6 w-auto" />
     </button>
   );
 }

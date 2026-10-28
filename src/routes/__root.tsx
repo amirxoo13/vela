@@ -3,7 +3,7 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import appCss from "../styles.css?url";
 
-const APP_NAME = "VELA";
+const APP_NAME = "Melobi";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -11,11 +11,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: APP_NAME },
-      { name: "description", content: "VELA — a music desk. Behnoosh dances when the track plays. Albums, sessions, tour holds, and a cover lab." },
+      { name: "description", content: "Melobi — music streaming. Play trending tracks, albums, playlists, and videos." },
       { name: "theme-color", content: "#1f7d42" },
     ],
     links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+      { rel: "icon", type: "image/png", href: "/favicon.png" },
+      { rel: "icon", href: "/favicon.ico" },
       { rel: "stylesheet", href: appCss },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },

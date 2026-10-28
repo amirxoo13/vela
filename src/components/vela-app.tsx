@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   Heart,
   Pause,
   Play,
@@ -10,18 +11,17 @@ import {
   SkipForward,
   Ticket,
 } from "lucide-react";
+import { fmt, formatCount } from "@/data/catalog";
+import { mountAudio } from "@/lib/audio-engine";
 import {
-  albums,
-  artist,
-  fmt,
-  posts,
-  sessions,
-  stops,
-  trackById,
-  tracksFor,
-  videos,
-  albumById,
-} from "@/data/catalog";
+  EMPTY_ALBUM,
+  EMPTY_TRACK,
+  useCatalog,
+  type Album,
+  type Story,
+  type Track,
+} from "@/lib/catalog-store";
+import { downloadHref, getData } from "@/lib/music-api";
 import { levels } from "@/lib/tone";
 import { usePlayer, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
 import { Logo, StickerGlyph } from "@/components/mark";
@@ -68,14 +68,42 @@ export function VelaApp() {
 }
 
 function Engine() {
-  const advance = usePlayer((s) => s.advance);
+  const ref = useRef<HTMLAudioElement>(null);
   useEffect(() => {
+    mountAudio(ref.current, {
+      onTime: (seconds) => {
+        const state = usePlayer.getState();
+        if (!state.playing || state.scrubbing) return;
+        usePlayer.setState({ position: seconds });
+      },
+      onEnd: () => {
+        if (usePlayer.getState().playing) usePlayer.getState().next();
+      },
+      onDuration: (seconds) => {
+        useCatalog.getState().noteDuration(usePlayer.getState().trackId, seconds);
+      },
+    });
     usePlayer.getState().hydrate();
+    void useCatalog.getState().load().then(() => {
+      const catalog = useCatalog.getState();
+      const player = usePlayer.getState();
+      const known = catalog.trackMap[player.trackId];
+      const first = catalog.playOrder[0];
+      if (!known && first) {
+        usePlayer.setState({
+          trackId: first,
+          albumId: catalog.trackMap[first]?.albumId || "trending",
+          position: 0,
+          playing: false,
+        });
+      } else if (known && !catalog.albumMap[player.albumId]) {
+        usePlayer.setState({ albumId: known.albumId || "trending" });
+      }
+      if (catalog.videos.length && !catalog.videos.some((video) => video.id === player.videoId)) {
+        usePlayer.setState({ videoId: catalog.videos[0]?.id ?? "" });
+      }
+    });
   }, []);
-  useEffect(() => {
-    const id = window.setInterval(() => advance(0.25), 250);
-    return () => window.clearInterval(id);
-  }, [advance]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -88,7 +116,14 @@ function Engine() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  return null;
+  return (
+    <audio
+      ref={ref}
+      preload="metadata"
+      crossOrigin="anonymous"
+      className="pointer-events-none absolute size-px opacity-0"
+    />
+  );
 }
 
 function MobileHome() {
@@ -101,6 +136,7 @@ function MobileHome() {
           <TourPill />
         </div>
         <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+          <Chip label="Search" onClick={() => setScreen("search")} />
           <Chip label="Albums" onClick={() => setScreen("albums")} />
           <Chip label="Videos" onClick={() => setScreen("videos")} />
           <Chip label="Socials" onClick={() => setScreen("socials")} />
@@ -184,6 +220,7 @@ function NavText() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
     <nav className="flex items-center gap-6 text-sm font-semibold">
+      <button type="button" onClick={() => setScreen("search")}>Search</button>
       <button type="button" onClick={() => setScreen("albums")}>Albums</button>
       <button type="button" onClick={() => setScreen("videos")}>Videos</button>
       <button type="button" onClick={() => setScreen("socials")}>Socials</button>
@@ -299,15 +336,15 @@ function Hero({ compact = false }: { compact?: boolean }) {
   const width = compact ? "max-w-[440px]" : "max-w-[560px]";
   return (
     <div className="relative">
-      <p className="relative z-20 text-xs font-extrabold tracking-[0.28em] text-paper/90">{dance ? "LIVE" : "VELA"}</p>
+      <p className="relative z-20 text-xs font-extrabold tracking-[0.28em] text-paper/90">{dance ? "LIVE" : "MELOBI"}</p>
       <div className="relative mt-1">
         <div className="pointer-events-none absolute inset-x-0 top-1 z-0 flex items-start justify-between font-display leading-[0.82] text-paper">
-          <span className={word}>BEHN</span>
-          <span className={word}>OOSH</span>
+          <span className={word}>MEL</span>
+          <span className={word}>OBI</span>
         </div>
         <img
           src="/art/hero-clay.png"
-          alt="Behnoosh as a 3D music character"
+          alt="Melobi"
           className={`relative z-10 mx-auto block w-full ${width} ${dance ? "invisible" : ""}`}
         />
         {dance ? (
@@ -319,13 +356,32 @@ function Hero({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function useNow() {
+  const trackId = usePlayer((s) => s.trackId);
+  const albumId = usePlayer((s) => s.albumId);
+  const track = useCatalog((s) => s.trackMap[trackId]) ?? EMPTY_TRACK;
+  const membership = useCatalog((s) => s.membership[albumId]);
+  const screenAlbum = useCatalog((s) => s.albumMap[albumId]);
+  const ownAlbum = useCatalog((s) => s.albumMap[track.albumId]);
+  const album = (track.id && membership?.includes(track.id) ? screenAlbum : ownAlbum) ?? EMPTY_ALBUM;
+  return { track, album };
+}
+
+async function playVideo(videoId: string) {
+  const id = await useCatalog.getState().resolveVideoTrack(videoId);
+  if (id) usePlayer.getState().openVideo(videoId, id);
+}
+
 function LiveCard() {
   const session = usePlayer((s) => s.session);
   const setSession = usePlayer((s) => s.setSession);
-  const openVideo = usePlayer((s) => s.openVideo);
   const setScreen = usePlayer((s) => s.setScreen);
+  const sessions = useCatalog((s) => s.videos);
   const item = sessions[session] ?? sessions[0];
-  const shift = (dir: number) => setSession((session + dir + sessions.length) % sessions.length);
+  const shift = (dir: number) => {
+    if (!sessions.length) return;
+    setSession((session + dir + sessions.length) % sessions.length);
+  };
   return (
     <article className={`${glass} p-3`}>
       <div className="mb-2 flex items-center justify-between">
@@ -335,15 +391,19 @@ function LiveCard() {
         </button>
       </div>
       <div className="relative overflow-hidden rounded-2xl">
-        <img src={item.image} alt="" className="aspect-video w-full object-cover" />
-        <p className="absolute bottom-3 left-3 max-w-[70%] text-sm font-extrabold leading-tight">{item.title}</p>
+        {item?.image ? (
+          <img src={item.image} alt="" className="aspect-video w-full object-cover" />
+        ) : (
+          <div className="aspect-video w-full bg-ink/30" />
+        )}
+        <p className="absolute bottom-3 left-3 max-w-[70%] text-sm font-extrabold leading-tight">{item?.title ?? ""}</p>
         <button type="button" aria-label="Previous session" onClick={() => shift(-1)} className="absolute left-1 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-full bg-ink/50">
           <ChevronLeft className="size-4" />
         </button>
         <button
           type="button"
-          aria-label={`Play ${item.title}`}
-          onClick={() => openVideo(item.id, item.trackId)}
+          aria-label={item ? `Play ${item.title}` : "Play session"}
+          onClick={() => item && void playVideo(item.id)}
           className="absolute left-1/2 top-1/2 grid size-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-paper text-ink"
         >
           <Play className="size-5 fill-current" />
@@ -357,7 +417,7 @@ function LiveCard() {
 }
 
 function PlayerCard() {
-  const trackId = usePlayer((s) => s.trackId);
+  const { track, album } = useNow();
   const playing = usePlayer((s) => s.playing);
   const position = usePlayer((s) => s.position);
   const liked = usePlayer((s) => s.liked);
@@ -367,25 +427,31 @@ function PlayerCard() {
   const prev = usePlayer((s) => s.prev);
   const openAlbum = usePlayer((s) => s.openAlbum);
   const setPlayerOpen = usePlayer((s) => s.setPlayerOpen);
-  const track = trackById(trackId);
-  const album = albumById(track.albumId);
   const on = !!liked[track.id];
+  const cover = track.cover || album.cover;
   return (
     <article className={`${glass} p-3`}>
       <div className="mb-2 flex items-center justify-between">
-        <button type="button" aria-label="Open album" onClick={() => openAlbum(album.id)} className="grid size-9 place-items-center rounded-full bg-paper/10">
+        <button type="button" aria-label="Open album" onClick={() => album.id && openAlbum(album.id)} className="grid size-9 place-items-center rounded-full bg-paper/10">
           <span className="flex flex-col gap-1">
             <span className="block h-0.5 w-4 bg-paper" />
             <span className="block h-0.5 w-4 bg-paper" />
             <span className="block h-0.5 w-3 bg-paper" />
           </span>
         </button>
-        <button type="button" aria-label={on ? "Unlike" : "Like"} onClick={() => toggleLike()} className="grid size-9 place-items-center rounded-full bg-paper/10">
-          <Heart className={`size-4 ${on ? "fill-hot text-hot" : ""}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          <DownloadLink track={track} compact />
+          <button type="button" aria-label={on ? "Unlike" : "Like"} onClick={() => toggleLike()} className="grid size-9 place-items-center rounded-full bg-paper/10">
+            <Heart className={`size-4 ${on ? "fill-hot text-hot" : ""}`} />
+          </button>
+        </div>
       </div>
       <button type="button" onClick={() => setPlayerOpen(true)} className="mx-auto block">
-        <img src="/art/portrait-clay.png" alt="" className="mx-auto size-36 rounded-full bg-ink object-cover object-top min-[1100px]:size-28" />
+        {cover ? (
+          <img src={cover} alt="" className="mx-auto size-36 rounded-full bg-ink object-cover object-top min-[1100px]:size-28" />
+        ) : (
+          <span className="mx-auto block size-36 rounded-full bg-ink min-[1100px]:size-28" />
+        )}
       </button>
       <div className="mt-3 flex items-center justify-between px-6">
         <button type="button" aria-label="Previous" onClick={prev} className="grid size-11 place-items-center rounded-full bg-paper/10">
@@ -399,13 +465,27 @@ function PlayerCard() {
         </button>
       </div>
       <button type="button" onClick={() => setPlayerOpen(true)} className="mt-3 w-full text-center">
-        <p className="truncate text-sm font-extrabold">{artist} — {track.title}</p>
+        <p className="truncate text-sm font-extrabold">{track.artist ? `${track.artist} — ${track.title}` : track.title}</p>
         <p className="text-xs font-bold tracking-wide text-mute">{album.title.toUpperCase()}</p>
       </button>
       <div className="mt-2">
         <Seek position={position} duration={track.duration} />
       </div>
     </article>
+  );
+}
+
+function DownloadLink({ track, compact = false }: { track: Track; compact?: boolean }) {
+  const href = track.downloadPath ? downloadHref(track) : "";
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      aria-label="Download"
+      className={compact ? "grid size-9 place-items-center rounded-full bg-paper/10" : "grid size-11 place-items-center"}
+    >
+      <Download className={compact ? "size-4" : "size-4"} />
+    </a>
   );
 }
 
@@ -436,6 +516,7 @@ function Seek({ position, duration }: { position: number; duration: number }) {
           const up = () => {
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
+            usePlayer.getState().endScrub();
           };
           window.addEventListener("pointermove", move);
           window.addEventListener("pointerup", up);
@@ -443,6 +524,7 @@ function Seek({ position, duration }: { position: number; duration: number }) {
         onKeyDown={(e) => {
           if (e.key === "ArrowRight") seek(position + 5);
           if (e.key === "ArrowLeft") seek(position - 5);
+          if (e.key === "ArrowRight" || e.key === "ArrowLeft") usePlayer.getState().endScrub();
         }}
       >
         <span className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-paper/30" />
@@ -457,6 +539,7 @@ function Seek({ position, duration }: { position: number; duration: number }) {
 function AlbumsCard() {
   const setScreen = usePlayer((s) => s.setScreen);
   const openAlbum = usePlayer((s) => s.openAlbum);
+  const albums = useCatalog((s) => s.albums);
   return (
     <article className={`${glass} p-3`}>
       <div className="mb-2 flex items-center justify-between">
@@ -466,9 +549,13 @@ function AlbumsCard() {
         </button>
       </div>
       <div className="flex gap-2">
-        {albums.map((a) => (
-          <button key={a.id} type="button" onClick={() => openAlbum(a.id)} className="min-w-0 flex-1">
-            <img src={a.cover} alt={a.title} className="aspect-square w-full rounded-xl object-cover" />
+        {albums.slice(0, 4).map((album) => (
+          <button key={album.id} type="button" onClick={() => openAlbum(album.id)} className="min-w-0 flex-1">
+            {album.cover ? (
+              <img src={album.cover} alt={album.title} className="aspect-square w-full rounded-xl object-cover" />
+            ) : (
+              <span className="block aspect-square w-full rounded-xl bg-ink/30" />
+            )}
           </button>
         ))}
       </div>
@@ -478,24 +565,25 @@ function AlbumsCard() {
 
 function TourCard() {
   const setScreen = usePlayer((s) => s.setScreen);
+  const events = useCatalog((s) => s.events);
   return (
     <article className="overflow-hidden rounded-3xl border border-line bg-glass/75">
       <button type="button" onClick={() => setScreen("tour")} className="block w-full text-left">
         <div className="relative">
           <img src="/art/stage.jpg" alt="" className="h-28 w-full object-cover object-top" />
           <div className="absolute inset-x-3 bottom-3">
-            <p className="font-display text-xl leading-none">VOLTAGE</p>
-            <p className="text-[10px] font-extrabold tracking-widest">THE ROOM TOUR</p>
+            <p className="font-display text-xl leading-none">LIVE</p>
+            <p className="text-[10px] font-extrabold tracking-widest">EVENTS</p>
           </div>
         </div>
         <div className="bg-panel px-3 py-3 text-paper">
-          <p className="text-center text-sm font-extrabold">World Tour ‘Voltage’</p>
-          <p className="mb-2 text-center text-xs text-paper/80">2026</p>
+          <p className="text-center text-sm font-extrabold">Events</p>
+          <p className="mb-2 text-center text-xs text-paper/80">{events.length ? `${events.length} dates` : "Dates"}</p>
           <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-            {stops.slice(0, 6).map((s) => (
-              <li key={s.id} className="flex justify-between gap-2 border-b border-paper/15 py-0.5">
-                <span className="truncate">{s.city}</span>
-                <span className="tabular-nums">{s.date}</span>
+            {events.slice(0, 6).map((stop) => (
+              <li key={stop.id} className="flex justify-between gap-2 border-b border-paper/15 py-0.5">
+                <span className="truncate">{stop.city}</span>
+                <span className="tabular-nums">{stop.date}</span>
               </li>
             ))}
           </ul>
@@ -506,21 +594,25 @@ function TourCard() {
 }
 
 function NowBar() {
-  const trackId = usePlayer((s) => s.trackId);
+  const { track, album } = useNow();
   const playing = usePlayer((s) => s.playing);
   const position = usePlayer((s) => s.position);
   const togglePlay = usePlayer((s) => s.togglePlay);
   const setPlayerOpen = usePlayer((s) => s.setPlayerOpen);
-  const track = trackById(trackId);
-  const pct = Math.min(100, (position / track.duration) * 100);
+  const pct = track.duration > 0 ? Math.min(100, (position / track.duration) * 100) : 0;
+  const cover = track.cover || album.cover;
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3">
       <div className="mx-auto flex max-w-[520px] items-center gap-3 rounded-2xl bg-glass px-3 py-2 shadow-lg min-[1100px]:max-w-[720px]">
         <button type="button" onClick={() => setPlayerOpen(true)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-          <img src={albumById(track.albumId).cover} alt="" className="size-12 rounded-xl object-cover" />
+          {cover ? (
+            <img src={cover} alt="" className="size-12 rounded-xl object-cover" />
+          ) : (
+            <span className="size-12 shrink-0 rounded-xl bg-ink/40" />
+          )}
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-extrabold">{track.title}</span>
-            <span className="block truncate text-xs text-mute">{artist}</span>
+            <span className="block truncate text-xs text-mute">{track.artist}</span>
             <span className="mt-1 block h-1 overflow-hidden rounded-full bg-paper/20">
               <span className="block h-full bg-paper" style={{ width: `${pct}%` }} />
             </span>
@@ -535,7 +627,7 @@ function NowBar() {
 }
 
 function FullPlayer() {
-  const trackId = usePlayer((s) => s.trackId);
+  const { track, album } = useNow();
   const playing = usePlayer((s) => s.playing);
   const position = usePlayer((s) => s.position);
   const liked = usePlayer((s) => s.liked);
@@ -544,9 +636,12 @@ function FullPlayer() {
   const next = usePlayer((s) => s.next);
   const prev = usePlayer((s) => s.prev);
   const setPlayerOpen = usePlayer((s) => s.setPlayerOpen);
-  const track = trackById(trackId);
-  const album = albumById(track.albumId);
   const on = !!liked[track.id];
+  const cover = track.cover || album.cover;
+  const detail = [
+    track.plays != null ? `${formatCount(track.plays)} plays` : "",
+    track.likes != null ? `${formatCount(track.likes)} likes` : "",
+  ].filter(Boolean).join(" · ");
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/75 p-3 min-[1100px]:items-center" onClick={() => setPlayerOpen(false)}>
       <div className="w-full max-w-[420px] rounded-[28px] bg-panel p-5 text-paper" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Now playing">
@@ -556,15 +651,26 @@ function FullPlayer() {
             Close
           </button>
         </div>
-        <img src={album.cover} alt="" className="mx-auto aspect-square w-full max-w-[280px] rounded-3xl object-cover" />
+        {cover ? (
+          <img src={cover} alt="" className="mx-auto aspect-square w-full max-w-[280px] rounded-3xl object-cover" />
+        ) : (
+          <div className="mx-auto aspect-square w-full max-w-[280px] rounded-3xl bg-ink/30" />
+        )}
         <div className="mt-4 flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-3xl leading-none">{track.title}</h2>
-            <p className="mt-1 text-sm font-semibold text-paper/80">{artist} · {album.title}</p>
+            <p className="mt-1 text-sm font-semibold text-paper/80">{[track.artist, album.title].filter(Boolean).join(" · ")}</p>
           </div>
-          <button type="button" aria-label={on ? "Unlike" : "Like"} onClick={() => toggleLike()} className="grid size-11 place-items-center rounded-full bg-ink/25">
-            <Heart className={`size-5 ${on ? "fill-hot text-hot" : ""}`} />
-          </button>
+          <div className="flex items-center gap-2">
+            {track.downloadPath ? (
+              <a href={downloadHref(track)} aria-label="Download" className="grid size-11 place-items-center rounded-full bg-ink/25">
+                <Download className="size-5" />
+              </a>
+            ) : null}
+            <button type="button" aria-label={on ? "Unlike" : "Like"} onClick={() => toggleLike()} className="grid size-11 place-items-center rounded-full bg-ink/25">
+              <Heart className={`size-5 ${on ? "fill-hot text-hot" : ""}`} />
+            </button>
+          </div>
         </div>
         <div className="mt-4">
           <Seek position={position} duration={track.duration} />
@@ -580,7 +686,7 @@ function FullPlayer() {
             <SkipForward className="fill-current" />
           </button>
         </div>
-        <p className="mt-4 text-center text-xs text-paper/75">Original room sketch — synthesized in the browser, not a streamed master.</p>
+        <p className="mt-4 text-center text-xs text-paper/75">{detail || "Now playing"}</p>
       </div>
     </div>
   );
@@ -589,9 +695,12 @@ function FullPlayer() {
 function Section() {
   const screen = usePlayer((s) => s.screen);
   const setScreen = usePlayer((s) => s.setScreen);
+  const albumId = usePlayer((s) => s.albumId);
+  const albumTitle = useCatalog((s) => s.albumMap[albumId]?.title ?? "");
   const title =
+    screen === "search" ? "Search" :
     screen === "albums" ? "Albums" :
-    screen === "album" ? albumById(usePlayer.getState().albumId).title :
+    screen === "album" ? albumTitle :
     screen === "videos" ? "Videos" :
     screen === "socials" ? "Socials" :
     screen === "tour" ? "World Tour" :
@@ -606,6 +715,7 @@ function Section() {
           <Logo onClick={() => setScreen("home")} />
           <h1 className="ml-auto font-display text-xl leading-none">{title}</h1>
         </header>
+        {screen === "search" && <SearchPage />}
         {screen === "albums" && <AlbumsPage />}
         {screen === "album" && <AlbumPage />}
         {screen === "videos" && <VideosPage />}
@@ -617,15 +727,26 @@ function Section() {
   );
 }
 
+function albumMeta(album: Album, count: number) {
+  const total = count || album.count;
+  return [album.artist, album.year, total ? `${total} tracks` : ""].filter(Boolean).join(" · ");
+}
+
 function AlbumsPage() {
   const openAlbum = usePlayer((s) => s.openAlbum);
+  const albums = useCatalog((s) => s.albums);
+  const membership = useCatalog((s) => s.membership);
   return (
     <div className="grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
-      {albums.map((a) => (
-        <button key={a.id} type="button" onClick={() => openAlbum(a.id)} className="text-left">
-          <img src={a.cover} alt="" className="aspect-square w-full rounded-2xl object-cover" />
-          <p className="mt-2 font-extrabold">{a.title}</p>
-          <p className="text-sm text-paper/80">{a.year} · {tracksFor(a.id).length} tracks</p>
+      {albums.map((album) => (
+        <button key={album.id} type="button" onClick={() => openAlbum(album.id)} className="text-left">
+          {album.cover ? (
+            <img src={album.cover} alt="" className="aspect-square w-full rounded-2xl object-cover" />
+          ) : (
+            <span className="block aspect-square w-full rounded-2xl bg-ink/30" />
+          )}
+          <p className="mt-2 font-extrabold">{album.title}</p>
+          <p className="text-sm text-paper/80">{albumMeta(album, membership[album.id]?.length ?? 0)}</p>
         </button>
       ))}
     </div>
@@ -640,40 +761,166 @@ function AlbumPage() {
   const playTrack = usePlayer((s) => s.playTrack);
   const togglePlay = usePlayer((s) => s.togglePlay);
   const toggleLike = usePlayer((s) => s.toggleLike);
-  const album = albumById(albumId);
-  const list = tracksFor(albumId);
+  const album = useCatalog((s) => s.albumMap[albumId]) ?? EMPTY_ALBUM;
+  const ids = useCatalog((s) => s.membership[albumId]);
+  const trackMap = useCatalog((s) => s.trackMap);
+  const list = (ids ?? []).map((id) => trackMap[id]).filter((track): track is Track => !!track);
+  useEffect(() => {
+    if (albumId) void useCatalog.getState().loadAlbum(albumId);
+  }, [albumId]);
   return (
     <div className="min-[1100px]:grid min-[1100px]:grid-cols-[280px_minmax(0,1fr)] min-[1100px]:gap-6">
       <div>
-        <img src={album.cover} alt="" className="aspect-square w-full rounded-3xl object-cover" />
+        {album.cover ? (
+          <img src={album.cover} alt="" className="aspect-square w-full rounded-3xl object-cover" />
+        ) : (
+          <div className="aspect-square w-full rounded-3xl bg-ink/30" />
+        )}
         <p className="mt-3 font-display text-4xl leading-none">{album.title}</p>
-        <p className="mt-1 text-sm">{artist} · {album.year}</p>
+        <p className="mt-1 text-sm">{[album.artist, album.year].filter(Boolean).join(" · ")}</p>
         <button
           type="button"
-          onClick={() => playTrack(list[0]?.id ?? trackId)}
+          onClick={() => {
+            void (async () => {
+              await useCatalog.getState().loadAlbum(album.id);
+              const first = useCatalog.getState().membership[album.id]?.[0];
+              if (first) playTrack(first, album.id);
+            })();
+          }}
           className="mt-3 inline-flex items-center gap-2 rounded-full bg-paper px-4 py-2 text-sm font-extrabold text-ink"
         >
           <Play className="size-4 fill-current" /> Play album
         </button>
       </div>
       <ol className="mt-4 flex flex-col gap-1 min-[1100px]:mt-0">
-        {list.map((t, i) => {
-          const active = t.id === trackId;
-          return (
-            <li key={t.id} className="flex items-center gap-2 rounded-2xl bg-ink/15 px-2 py-1">
-              <button type="button" onClick={() => (active && playing ? togglePlay() : playTrack(t.id))} className="grid size-11 place-items-center" aria-label={`Play ${t.title}`}>
-                {active && playing ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
-              </button>
-              <span className="w-5 text-sm tabular-nums text-paper/70">{i + 1}</span>
-              <span className="min-w-0 flex-1 truncate text-left font-bold">{t.title}</span>
-              <span className="text-xs tabular-nums text-paper/75">{fmt(t.duration)}</span>
-              <button type="button" aria-label="Like track" onClick={() => toggleLike(t.id)} className="grid size-11 place-items-center">
-                <Heart className={`size-4 ${liked[t.id] ? "fill-hot text-hot" : ""}`} />
-              </button>
-            </li>
-          );
-        })}
+        {list.map((track, index) => (
+          <TrackRow
+            key={track.id}
+            track={track}
+            index={index}
+            active={track.id === trackId}
+            playing={playing}
+            liked={!!liked[track.id]}
+            onPlay={() => (track.id === trackId && playing ? togglePlay() : playTrack(track.id, album.id))}
+            onLike={() => toggleLike(track.id)}
+          />
+        ))}
       </ol>
+    </div>
+  );
+}
+
+function TrackRow({
+  track,
+  index,
+  active,
+  playing,
+  liked,
+  onPlay,
+  onLike,
+}: {
+  track: Track;
+  index: number;
+  active: boolean;
+  playing: boolean;
+  liked: boolean;
+  onPlay: () => void;
+  onLike: () => void;
+}) {
+  return (
+    <li className="flex items-center gap-2 rounded-2xl bg-ink/15 px-2 py-1">
+      <button type="button" onClick={onPlay} className="grid size-11 place-items-center" aria-label={`Play ${track.title}`}>
+        {active && playing ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current" />}
+      </button>
+      <span className="w-5 text-sm tabular-nums text-paper/70">{index + 1}</span>
+      <span className="min-w-0 flex-1 truncate text-left font-bold">{track.title}</span>
+      <span className="text-xs tabular-nums text-paper/75">{fmt(track.duration)}</span>
+      <DownloadLink track={track} />
+      <button type="button" aria-label="Like track" onClick={onLike} className="grid size-11 place-items-center">
+        <Heart className={`size-4 ${liked ? "fill-hot text-hot" : ""}`} />
+      </button>
+    </li>
+  );
+}
+
+function SearchPage() {
+  const [q, setQ] = useState("");
+  const search = useCatalog((s) => s.search);
+  const trackMap = useCatalog((s) => s.trackMap);
+  const trackId = usePlayer((s) => s.trackId);
+  const playing = usePlayer((s) => s.playing);
+  const liked = usePlayer((s) => s.liked);
+  const playTrack = usePlayer((s) => s.playTrack);
+  const togglePlay = usePlayer((s) => s.togglePlay);
+  const toggleLike = usePlayer((s) => s.toggleLike);
+  const openAlbum = usePlayer((s) => s.openAlbum);
+  const searchFor = useCatalog((s) => s.searchFor);
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      void searchFor(q);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [q, searchFor]);
+  const tracks = search.trackIds.map((id) => trackMap[id]).filter((track): track is Track => !!track);
+  const cards = [
+    ...search.albums.map((album) => ({ key: album.id, title: album.title, subtitle: albumMeta(album, 0), image: album.cover, onClick: () => openAlbum(album.id) })),
+    ...search.podcasts.map((album) => ({ key: album.id, title: album.title, subtitle: album.artist || "Podcast", image: album.cover, onClick: () => openAlbum(album.id) })),
+    ...search.videos.map((video) => ({ key: `video:${video.id}`, title: video.title, subtitle: video.meta, image: video.image, onClick: () => void playVideo(video.id) })),
+    ...search.artists.map((artist) => ({
+      key: artist.id,
+      title: artist.title,
+      subtitle: artist.body,
+      image: artist.image,
+      onClick: () => {
+        if (artist.id.startsWith("user:")) {
+          void getData(`/api/v1/users/${encodeURIComponent(artist.id.slice(5))}`).catch(() => undefined);
+        }
+        setQ(artist.title);
+      },
+    })),
+  ];
+  const quiet = q.trim().length > 0 && !tracks.length && !cards.length;
+  return (
+    <div>
+      <input
+        value={q}
+        onChange={(event) => setQ(event.target.value)}
+        placeholder="Search"
+        aria-label="Search"
+        className="mb-3 w-full rounded-full bg-ink/25 px-4 py-2 text-sm font-bold text-paper outline-none placeholder:text-paper/60"
+      />
+      {quiet ? <p className="text-sm text-paper/80">No results</p> : null}
+      {tracks.length > 0 ? (
+        <ol className="flex flex-col gap-1">
+          {tracks.map((track, index) => (
+            <TrackRow
+              key={track.id}
+              track={track}
+              index={index}
+              active={track.id === trackId}
+              playing={playing}
+              liked={!!liked[track.id]}
+              onPlay={() => (track.id === trackId && playing ? togglePlay() : playTrack(track.id, "search"))}
+              onLike={() => toggleLike(track.id)}
+            />
+          ))}
+        </ol>
+      ) : null}
+      {cards.length > 0 ? (
+        <div className="mt-4 grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
+          {cards.map((card) => (
+            <button key={card.key} type="button" onClick={card.onClick} className="text-left">
+              {card.image ? (
+                <img src={card.image} alt="" className="aspect-square w-full rounded-2xl object-cover" />
+              ) : (
+                <span className="block aspect-square w-full rounded-2xl bg-ink/30" />
+              )}
+              <p className="mt-2 font-extrabold">{card.title}</p>
+              <p className="text-sm text-paper/80">{card.subtitle}</p>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -681,36 +928,47 @@ function AlbumPage() {
 function VideosPage() {
   const videoId = usePlayer((s) => s.videoId);
   const playing = usePlayer((s) => s.playing);
-  const openVideo = usePlayer((s) => s.openVideo);
   const togglePlay = usePlayer((s) => s.togglePlay);
-  const active = videos.find((v) => v.id === videoId) ?? videos[0];
+  const videos = useCatalog((s) => s.videos);
+  const active = videos.find((video) => video.id === videoId) ?? videos[0];
   return (
     <div>
       <div className="relative overflow-hidden rounded-3xl">
-        <img src={active.image} alt="" className="aspect-video w-full object-cover" />
+        {active?.image ? (
+          <img src={active.image} alt="" className="aspect-video w-full object-cover" />
+        ) : (
+          <div className="aspect-video w-full bg-ink/30" />
+        )}
         <div className="absolute inset-0 bg-ink/35" />
         <div className="absolute inset-x-4 bottom-4">
           <Bars />
-          <p className="mt-2 font-extrabold">{active.title}</p>
-          <p className="text-xs text-paper/80">{active.meta}</p>
+          <p className="mt-2 font-extrabold">{active?.title ?? ""}</p>
+          <p className="text-xs text-paper/80">{active?.meta ?? ""}</p>
         </div>
         <button
           type="button"
           aria-label={playing ? "Pause session" : "Play session"}
-          onClick={() => (playing ? togglePlay() : openVideo(active.id, active.trackId))}
+          onClick={() => {
+            if (playing) togglePlay();
+            else if (active) void playVideo(active.id);
+          }}
           className="absolute left-1/2 top-1/3 grid size-14 -translate-x-1/2 place-items-center rounded-full bg-paper text-ink"
         >
           {playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
         </button>
       </div>
       <ul className="mt-3 flex flex-col gap-2">
-        {videos.map((v) => (
-          <li key={v.id}>
-            <button type="button" onClick={() => openVideo(v.id, v.trackId)} className={`flex w-full items-center gap-3 rounded-2xl p-2 text-left ${v.id === active.id ? "bg-ink/25" : "bg-ink/10"}`}>
-              <img src={v.image} alt="" className="size-16 rounded-xl object-cover" />
+        {videos.map((video) => (
+          <li key={video.id}>
+            <button type="button" onClick={() => void playVideo(video.id)} className={`flex w-full items-center gap-3 rounded-2xl p-2 text-left ${video.id === active?.id ? "bg-ink/25" : "bg-ink/10"}`}>
+              {video.image ? (
+                <img src={video.image} alt="" className="size-16 rounded-xl object-cover" />
+              ) : (
+                <span className="size-16 shrink-0 rounded-xl bg-ink/30" />
+              )}
               <span>
-                <span className="block font-extrabold">{v.title}</span>
-                <span className="text-xs text-paper/75">{v.meta}</span>
+                <span className="block font-extrabold">{video.title}</span>
+                <span className="text-xs text-paper/75">{video.meta}</span>
               </span>
             </button>
           </li>
@@ -740,49 +998,61 @@ function Bars() {
 function SocialsPage() {
   const saved = usePlayer((s) => s.posts);
   const togglePost = usePlayer((s) => s.togglePost);
+  const stories = useCatalog((s) => s.stories);
   return (
     <div className="grid gap-3 min-[1100px]:grid-cols-3">
-      {posts.map((p) => (
-        <article key={p.id} className="overflow-hidden rounded-3xl bg-ink/20">
-          <img src={p.image} alt="" className="aspect-[4/3] w-full object-cover" />
-          <div className="p-3">
-            <h2 className="font-extrabold">{p.title}</h2>
-            <p className="mt-1 text-sm leading-relaxed text-paper/85">{p.body}</p>
-            <button type="button" onClick={() => togglePost(p.id)} className="mt-3 inline-flex items-center gap-2 rounded-full bg-paper/15 px-3 py-2 text-xs font-extrabold">
-              <Heart className={`size-4 ${saved[p.id] ? "fill-hot text-hot" : ""}`} />
-              {saved[p.id] ? "Saved" : "Save"}
-            </button>
-          </div>
-        </article>
+      {stories.map((story) => (
+        <StoryCard key={story.id} story={story} saved={!!saved[story.id]} onSave={() => togglePost(story.id)} />
       ))}
     </div>
+  );
+}
+
+function StoryCard({ story, saved, onSave }: { story: Story; saved: boolean; onSave: () => void }) {
+  return (
+    <article className="overflow-hidden rounded-3xl bg-ink/20">
+      {story.image ? (
+        <img src={story.image} alt="" className="aspect-[4/3] w-full object-cover" />
+      ) : (
+        <div className="aspect-[4/3] w-full bg-ink/30" />
+      )}
+      <div className="p-3">
+        <h2 className="font-extrabold">{story.title}</h2>
+        <p className="mt-1 text-sm leading-relaxed text-paper/85">{story.body}</p>
+        <button type="button" onClick={onSave} className="mt-3 inline-flex items-center gap-2 rounded-full bg-paper/15 px-3 py-2 text-xs font-extrabold">
+          <Heart className={`size-4 ${saved ? "fill-hot text-hot" : ""}`} />
+          {saved ? "Saved" : "Save"}
+        </button>
+      </div>
+    </article>
   );
 }
 
 function TourPage() {
   const holds = usePlayer((s) => s.holds);
   const toggleHold = usePlayer((s) => s.toggleHold);
-  const count = stops.filter((s) => holds[s.id]).length;
+  const events = useCatalog((s) => s.events);
+  const count = events.filter((stop) => holds[stop.id]).length;
   return (
     <div>
       <div className="overflow-hidden rounded-3xl">
         <img src="/art/stage.jpg" alt="" className="h-48 w-full object-cover" />
       </div>
-      <p className="mt-3 font-display text-4xl leading-none">Voltage</p>
-      <p className="text-sm text-paper/80">2026 · {count} seat {count === 1 ? "hold" : "holds"} on this device</p>
+      <p className="mt-3 font-display text-4xl leading-none">Events</p>
+      <p className="text-sm text-paper/80">{count} seat {count === 1 ? "hold" : "holds"} on this device</p>
       <ul className="mt-4 flex flex-col gap-2">
-        {stops.map((s) => {
-          const on = !!holds[s.id];
+        {events.map((stop) => {
+          const on = !!holds[stop.id];
           return (
-            <li key={s.id} className="flex items-center gap-3 rounded-2xl bg-ink/15 px-3 py-2">
+            <li key={stop.id} className="flex items-center gap-3 rounded-2xl bg-ink/15 px-3 py-2">
               <div className="min-w-0 flex-1">
-                <p className="font-extrabold">{s.city}</p>
-                <p className="text-xs text-paper/75">{s.country}</p>
+                <p className="font-extrabold">{stop.city}</p>
+                <p className="text-xs text-paper/75">{stop.country}</p>
               </div>
-              <span className="tabular-nums text-sm font-bold">{s.date}</span>
+              <span className="tabular-nums text-sm font-bold">{stop.date}</span>
               <button
                 type="button"
-                onClick={() => toggleHold(s.id)}
+                onClick={() => toggleHold(stop.id)}
                 className={`rounded-full px-3 py-2 text-xs font-extrabold ${on ? "bg-paper text-ink" : "bg-ink/30 text-paper"}`}
               >
                 {on ? "Held" : "Hold"}
@@ -807,9 +1077,10 @@ function EditorPage() {
 function CoverStage({ tall }: { tall: boolean }) {
   const stickers = usePlayer((s) => s.stickers);
   const move = usePlayer((s) => s.moveSticker);
+  const cover = useCatalog((s) => s.albums.find((album) => album.cover)?.cover || s.trackMap[s.playOrder[0] ?? ""]?.cover || "");
   return (
     <div className={`relative overflow-hidden rounded-2xl bg-ink ${tall ? "aspect-square" : "h-36"}`}>
-      <img src="/art/album-voltage.jpg" alt="Voltage cover" className="h-full w-full object-cover" />
+      {cover ? <img src={cover} alt="" className="h-full w-full object-cover" /> : null}
       {stickers.map((s) => (
         <Draggable key={s.uid} sticker={s} onMove={move} />
       ))}
@@ -875,4 +1146,3 @@ function StickerTray() {
     </div>
   );
 }
-

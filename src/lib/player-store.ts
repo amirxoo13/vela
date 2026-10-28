@@ -1,10 +1,12 @@
 import { create } from "zustand";
-import { albumById, trackById, tracks } from "@/data/catalog";
+import { pauseMedia, playMedia, seekMedia, mediaDuration } from "@/lib/audio-engine";
+import { albumById, queueIds, trackById, useCatalog } from "@/lib/catalog-store";
+import { playbackSrc } from "@/lib/music-api";
 import { startBeat, stopBeat } from "@/lib/tone";
 
 export type ThemeId = "green" | "crimson" | "night" | "ice";
 
-export type Screen = "home" | "albums" | "album" | "videos" | "socials" | "tour" | "editor";
+export type Screen = "home" | "search" | "albums" | "album" | "videos" | "socials" | "tour" | "editor";
 
 export type Sticker = { uid: string; kind: StickerKind; x: number; y: number };
 
@@ -26,6 +28,7 @@ type State = Persisted & {
   session: number;
   playing: boolean;
   position: number;
+  scrubbing: boolean;
   playerOpen: boolean;
   notice: string;
   hydrated: boolean;
@@ -34,11 +37,11 @@ type State = Persisted & {
   openVideo: (videoId: string, trackId: string) => void;
   setSession: (session: number) => void;
   togglePlay: () => void;
-  playTrack: (trackId: string) => void;
+  playTrack: (trackId: string, albumId?: string) => void;
   next: () => void;
   prev: () => void;
   seek: (position: number) => void;
-  advance: (dt: number) => void;
+  endScrub: () => void;
   toggleLike: (trackId?: string) => void;
   toggleHold: (id: string) => void;
   togglePost: (id: string) => void;
@@ -84,14 +87,26 @@ function snapshot(s: State): Persisted {
   };
 }
 
+function begin(trackId: string, position: number) {
+  const track = trackById(trackId);
+  startBeat(variantFor(trackId));
+  const src = playbackSrc(track);
+  if (!src) {
+    stopBeat();
+    return Promise.reject(new Error("no-src"));
+  }
+  return playMedia(src, position);
+}
+
 export const usePlayer = create<State>((set, get) => ({
   screen: "home",
-  albumId: "voltage",
-  videoId: "room-lisbon",
+  albumId: "",
+  videoId: "",
   session: 0,
-  trackId: "glass-hour",
+  trackId: "",
   playing: false,
   position: 0,
+  scrubbing: false,
   playerOpen: false,
   liked: {},
   holds: {},
@@ -103,60 +118,94 @@ export const usePlayer = create<State>((set, get) => ({
   setScreen: (screen) => set({ screen, playerOpen: false }),
   openAlbum: (albumId) => set({ albumId, screen: "album", playerOpen: false }),
   openVideo: (videoId, trackId) => {
-    set({ videoId, trackId, position: 0, playing: true, screen: "videos" });
-    startBeat(variantFor(trackId));
+    const track = trackById(trackId);
+    set({
+      videoId,
+      trackId,
+      albumId: track.albumId || get().albumId,
+      position: 0,
+      playing: true,
+      screen: "videos",
+    });
+    void begin(trackId, 0).catch(() => {
+      stopBeat();
+      set({ playing: false });
+    });
   },
   setSession: (session) => set({ session }),
   togglePlay: () => {
     const s = get();
     if (s.playing) {
       stopBeat();
+      pauseMedia();
       set({ playing: false });
       return;
     }
-    startBeat(variantFor(s.trackId));
     set({ playing: true });
+    void begin(s.trackId, s.position).catch(() => {
+      stopBeat();
+      set({ playing: false });
+    });
   },
-  playTrack: (trackId) => {
-    set({ trackId, position: 0, playing: true });
-    startBeat(variantFor(trackId));
+  playTrack: (trackId, albumId) => {
+    const track = trackById(trackId);
+    const nextAlbum = albumId || track.albumId || get().albumId;
+    set({ trackId, albumId: nextAlbum, position: 0, playing: true });
     persist(snapshot(get()));
+    void begin(trackId, 0).catch(() => {
+      stopBeat();
+      set({ playing: false });
+    });
   },
   next: () => {
     const s = get();
-    const i = tracks.findIndex((t) => t.id === s.trackId);
-    const n = tracks[(i + 1) % tracks.length] ?? tracks[0];
-    set({ trackId: n.id, position: 0 });
-    if (s.playing) startBeat(variantFor(n.id));
+    const order = queueIds(s.albumId, s.trackId);
+    if (!order.length) return;
+    const index = order.indexOf(s.trackId);
+    const id = order[(index + 1) % order.length] ?? order[0];
+    if (!id) return;
+    const track = trackById(id);
+    const inAlbum = (useCatalog.getState().membership[s.albumId] ?? []).includes(id);
+    set({ trackId: id, albumId: inAlbum ? s.albumId : track.albumId || s.albumId, position: 0 });
+    if (s.playing) {
+      void begin(id, 0).catch(() => {
+        stopBeat();
+        set({ playing: false });
+      });
+    }
     persist(snapshot(get()));
   },
   prev: () => {
     const s = get();
     if (s.position > 3) {
+      seekMedia(0);
       set({ position: 0 });
       return;
     }
-    const i = tracks.findIndex((t) => t.id === s.trackId);
-    const n = tracks[(i - 1 + tracks.length) % tracks.length] ?? tracks[0];
-    set({ trackId: n.id, position: 0 });
-    if (s.playing) startBeat(variantFor(n.id));
+    const order = queueIds(s.albumId, s.trackId);
+    if (!order.length) return;
+    const index = order.indexOf(s.trackId);
+    const id = order[(index - 1 + order.length) % order.length] ?? order[0];
+    if (!id) return;
+    const track = trackById(id);
+    set({ trackId: id, albumId: track.albumId || s.albumId, position: 0 });
+    if (s.playing) {
+      void begin(id, 0).catch(() => {
+        stopBeat();
+        set({ playing: false });
+      });
+    }
     persist(snapshot(get()));
   },
   seek: (position) => {
-    const dur = trackById(get().trackId).duration;
-    set({ position: Math.min(dur - 0.2, Math.max(0, position)) });
+    const track = trackById(get().trackId);
+    const dur = mediaDuration() || track.duration;
+    const max = dur > 0.2 ? dur - 0.05 : Math.max(position, 0);
+    const nextPos = Math.min(max, Math.max(0, position));
+    seekMedia(nextPos);
+    set({ position: nextPos, scrubbing: true });
   },
-  advance: (dt) => {
-    const s = get();
-    if (!s.playing) return;
-    const dur = trackById(s.trackId).duration;
-    const position = s.position + dt;
-    if (position >= dur) {
-      get().next();
-      return;
-    }
-    set({ position });
-  },
+  endScrub: () => set({ scrubbing: false }),
   toggleLike: (trackId) => {
     const id = trackId ?? get().trackId;
     const liked = { ...get().liked, [id]: !get().liked[id] };
@@ -217,8 +266,11 @@ export const usePlayer = create<State>((set, get) => ({
         holds: data.holds ?? {},
         posts: data.posts ?? {},
         stickers: data.stickers?.length ? data.stickers : seedStickers,
-        trackId: data.trackId && tracks.some((t) => t.id === data.trackId) ? data.trackId : "glass-hour",
-        theme: data.theme === "crimson" || data.theme === "night" || data.theme === "ice" || data.theme === "green" ? data.theme : "green",
+        trackId: typeof data.trackId === "string" ? data.trackId : "",
+        theme:
+          data.theme === "crimson" || data.theme === "night" || data.theme === "ice" || data.theme === "green"
+            ? data.theme
+            : "green",
         hydrated: true,
       });
     } catch {
