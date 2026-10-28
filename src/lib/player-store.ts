@@ -1,12 +1,25 @@
 import { create } from "zustand";
 import { pauseMedia, playMedia, seekMedia, mediaDuration } from "@/lib/audio-engine";
 import { albumById, queueIds, trackById, useCatalog } from "@/lib/catalog-store";
+import { playlistQueue, useLibrary } from "@/lib/library";
 import { playbackSrc } from "@/lib/music-api";
 import { startBeat, stopBeat } from "@/lib/tone";
 
 export type ThemeId = "green" | "crimson" | "night" | "ice";
+export type RepeatMode = "off" | "all" | "one";
 
-export type Screen = "home" | "search" | "albums" | "album" | "videos" | "socials" | "tour" | "editor";
+export type Screen =
+  | "home"
+  | "search"
+  | "albums"
+  | "album"
+  | "videos"
+  | "socials"
+  | "tour"
+  | "editor"
+  | "history"
+  | "playlists"
+  | "favorites";
 
 export type Sticker = { uid: string; kind: StickerKind; x: number; y: number };
 
@@ -19,6 +32,8 @@ type Persisted = {
   stickers: Sticker[];
   trackId: string;
   theme: ThemeId;
+  repeat: RepeatMode;
+  shuffle: boolean;
 };
 
 type State = Persisted & {
@@ -53,6 +68,8 @@ type State = Persisted & {
   setTheme: (theme: ThemeId) => void;
   flash: (notice: string) => void;
   hydrate: () => void;
+  setRepeat: (repeat: RepeatMode) => void;
+  toggleShuffle: () => void;
 };
 
 const KEY = "vela-desk";
@@ -84,7 +101,18 @@ function snapshot(s: State): Persisted {
     stickers: s.stickers,
     trackId: s.trackId,
     theme: s.theme,
+    repeat: s.repeat,
+    shuffle: s.shuffle,
   };
+}
+
+function orderFor(albumId: string, trackId: string) {
+  return playlistQueue(albumId, trackId) ?? queueIds(albumId, trackId);
+}
+
+function listen(trackId: string) {
+  const track = trackById(trackId);
+  if (track.id) useLibrary.getState().remember(track);
 }
 
 function begin(trackId: string, position: number) {
@@ -115,6 +143,8 @@ export const usePlayer = create<State>((set, get) => ({
   notice: "",
   hydrated: false,
   theme: "green",
+  repeat: "all",
+  shuffle: false,
   setScreen: (screen) => set({ screen, playerOpen: false }),
   openAlbum: (albumId) => set({ albumId, screen: "album", playerOpen: false }),
   openVideo: (videoId, trackId) => {
@@ -127,6 +157,7 @@ export const usePlayer = create<State>((set, get) => ({
       playing: true,
       screen: "videos",
     });
+    listen(trackId);
     void begin(trackId, 0).catch(() => {
       stopBeat();
       set({ playing: false });
@@ -142,6 +173,7 @@ export const usePlayer = create<State>((set, get) => ({
       return;
     }
     set({ playing: true });
+    listen(s.trackId);
     void begin(s.trackId, s.position).catch(() => {
       stopBeat();
       set({ playing: false });
@@ -152,6 +184,7 @@ export const usePlayer = create<State>((set, get) => ({
     const nextAlbum = albumId || track.albumId || get().albumId;
     set({ trackId, albumId: nextAlbum, position: 0, playing: true });
     persist(snapshot(get()));
+    listen(trackId);
     void begin(trackId, 0).catch(() => {
       stopBeat();
       set({ playing: false });
@@ -159,14 +192,37 @@ export const usePlayer = create<State>((set, get) => ({
   },
   next: () => {
     const s = get();
-    const order = queueIds(s.albumId, s.trackId);
+    if (s.repeat === "one") {
+      seekMedia(0);
+      set({ position: 0, playing: true });
+      listen(s.trackId);
+      void begin(s.trackId, 0).catch(() => {
+        stopBeat();
+        set({ playing: false });
+      });
+      return;
+    }
+    const order = orderFor(s.albumId, s.trackId);
     if (!order.length) return;
     const index = order.indexOf(s.trackId);
-    const id = order[(index + 1) % order.length] ?? order[0];
+    if (!s.shuffle && s.repeat === "off" && index === order.length - 1) {
+      pauseMedia();
+      stopBeat();
+      set({ playing: false, position: 0 });
+      return;
+    }
+    let id = order[(index + 1) % order.length] ?? order[0];
+    if (s.shuffle && order.length > 1) {
+      const pool = order.filter((item) => item !== s.trackId);
+      id = pool[Math.floor(Math.random() * pool.length)] ?? id;
+    }
     if (!id) return;
     const track = trackById(id);
-    const inAlbum = (useCatalog.getState().membership[s.albumId] ?? []).includes(id);
+    const inAlbum =
+      (useCatalog.getState().membership[s.albumId] ?? []).includes(id) ||
+      Boolean(playlistQueue(s.albumId, id));
     set({ trackId: id, albumId: inAlbum ? s.albumId : track.albumId || s.albumId, position: 0 });
+    listen(id);
     if (s.playing) {
       void begin(id, 0).catch(() => {
         stopBeat();
@@ -182,13 +238,15 @@ export const usePlayer = create<State>((set, get) => ({
       set({ position: 0 });
       return;
     }
-    const order = queueIds(s.albumId, s.trackId);
+    const order = orderFor(s.albumId, s.trackId);
     if (!order.length) return;
     const index = order.indexOf(s.trackId);
     const id = order[(index - 1 + order.length) % order.length] ?? order[0];
     if (!id) return;
     const track = trackById(id);
-    set({ trackId: id, albumId: track.albumId || s.albumId, position: 0 });
+    const inAlbum = Boolean(playlistQueue(s.albumId, id));
+    set({ trackId: id, albumId: inAlbum ? s.albumId : track.albumId || s.albumId, position: 0 });
+    listen(id);
     if (s.playing) {
       void begin(id, 0).catch(() => {
         stopBeat();
@@ -246,6 +304,14 @@ export const usePlayer = create<State>((set, get) => ({
     set({ theme });
     persist(snapshot(get()));
   },
+  setRepeat: (repeat) => {
+    set({ repeat });
+    persist(snapshot(get()));
+  },
+  toggleShuffle: () => {
+    set({ shuffle: !get().shuffle });
+    persist(snapshot(get()));
+  },
   flash: (notice) => {
     set({ notice });
     window.setTimeout(() => {
@@ -271,6 +337,8 @@ export const usePlayer = create<State>((set, get) => ({
           data.theme === "crimson" || data.theme === "night" || data.theme === "ice" || data.theme === "green"
             ? data.theme
             : "green",
+        repeat: data.repeat === "off" || data.repeat === "one" || data.repeat === "all" ? data.repeat : "all",
+        shuffle: Boolean(data.shuffle),
         hydrated: true,
       });
     } catch {

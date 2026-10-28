@@ -2,12 +2,12 @@
 
 @theme {
   --color-ink: #070807;
-  --color-panel: #1f7d42;
-  --color-deep: #046b36;
-  --color-glass: #042818;
-  --color-paper: #f4f7f2;
-  --color-mute: #d5ecdf;
-  --color-line: #ffffff2e;
+  --color-panel: #1ed760;
+  --color-deep: #129943;
+  --color-glass: #063318;
+  --color-paper: #f7fff8;
+  --color-mute: #d7ffe6;
+  --color-line: #ffffff38;
   --color-hot: #ff4d6a;
   --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Archivo Black", "Arial Black", sans-serif;
@@ -49,31 +49,60 @@
   .hero-cut {
     mask-image: radial-gradient(ellipse 96% 98% at 50% 46%, #000 78%, transparent 100%);
   }
-  .swatch-green { background: #1f7d42; }
-  .swatch-crimson { background: #c41928; }
-  .swatch-night { background: #121418; }
-  .swatch-ice { background: #7ea8bc; }
+  .swatch-green { background: #1ed760; }
+  .swatch-crimson { background: #e10600; }
+  .swatch-night { background: #101114; }
+  .swatch-ice { background: #49b6e8; }
+  .glass-card {
+    background: color-mix(in srgb, black 38%, transparent);
+    backdrop-filter: blur(18px) saturate(1.25);
+    -webkit-backdrop-filter: blur(18px) saturate(1.25);
+    border: 1px solid rgb(255 255 255 / 24%);
+    box-shadow:
+      0 18px 40px rgb(0 0 0 / 32%),
+      inset 0 1px 0 rgb(255 255 255 / 20%);
+  }
+  .scene-glow {
+    filter: drop-shadow(0 0 42px color-mix(in srgb, var(--color-panel) 72%, transparent));
+  }
+  .disc-spin {
+    animation: disc-spin 9s linear infinite;
+    animation-play-state: paused;
+  }
+  .disc-spin.is-on {
+    animation-play-state: running;
+  }
+  .idle-sway {
+    animation: idle-sway 4.8s ease-in-out infinite;
+  }
+  @keyframes disc-spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes idle-sway {
+    0%, 100% { transform: translateY(0) rotate(-0.6deg); }
+    50% { transform: translateY(6px) rotate(0.8deg); }
+  }
 }
 
 [data-theme="crimson"] {
-  --color-panel: #c41928;
-  --color-deep: #8d1018;
-  --color-glass: #3c0a10;
-  --color-mute: #ffd0d4;
+  --color-panel: #e10600;
+  --color-deep: #9b0c08;
+  --color-glass: #3a0808;
+  --color-mute: #ffd5d2;
 }
 
 [data-theme="night"] {
-  --color-panel: #16181d;
-  --color-deep: #2c313a;
-  --color-glass: #0c0e12;
+  --color-panel: #101114;
+  --color-deep: #2a2d34;
+  --color-glass: #07080a;
   --color-mute: #c5ced8;
 }
 
 [data-theme="ice"] {
-  --color-panel: #3f6f86;
-  --color-deep: #2a5164;
-  --color-glass: #132833;
-  --color-mute: #d5e6ef;
+  --color-panel: #49b6e8;
+  --color-deep: #1d7eab;
+  --color-glass: #0d3348;
+  --color-mute: #e7f7fd;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -82,5 +111,9 @@
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+  .disc-spin,
+  .idle-sway {
+    animation: none !important;
   }
 }

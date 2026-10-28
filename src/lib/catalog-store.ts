@@ -89,6 +89,7 @@ type State = Draft & {
   searchFor: (query: string) => Promise<void>;
   resolveVideoTrack: (videoId: string) => Promise<string>;
   noteDuration: (id: string, seconds: number) => void;
+  ensureTrack: (track: Track) => void;
 };
 
 export const EMPTY_TRACK: Track = {
@@ -761,6 +762,11 @@ export const useCatalog = create<State>((set, get) => ({
       return view(draft);
     });
     return id;
+  },
+  ensureTrack: (track) => {
+    if (!track.id) return;
+    if (get().trackMap[track.id]) return;
+    set((state) => ({ trackMap: { ...state.trackMap, [track.id]: track } }));
   },
   noteDuration: (id, seconds) => {
     const track = get().trackMap[id];
