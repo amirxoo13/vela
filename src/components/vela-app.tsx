@@ -32,35 +32,53 @@ import { Logo, StickerGlyph } from "@/components/mark";
 
 const glass = "glass-card rounded-3xl text-paper";
 const kinds: StickerKind[] = ["star", "bolt", "flame", "disc", "spark", "moon", "heart", "drop"];
+const STAGE_QUERY = "(min-width: 1100px)";
+
+/** null until hydration so the first render matches the server (both trees, CSS picks one). */
+function useWideStage() {
+  const [wide, setWide] = useState<boolean | null>(null);
+  useEffect(() => {
+    const media = window.matchMedia(STAGE_QUERY);
+    const apply = () => setWide(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
+  return wide;
+}
 
 export function VelaApp() {
   const screen = usePlayer((s) => s.screen);
   const playerOpen = usePlayer((s) => s.playerOpen);
   const notice = usePlayer((s) => s.notice);
   const theme = usePlayer((s) => s.theme);
+  const wide = useWideStage();
 
   return (
     <div className="min-h-dvh bg-ink text-paper" data-theme={theme}>
       <Engine />
       {screen === "home" ? (
         <>
-          <div className="min-[1100px]:hidden">
-            <MobileHome />
-          </div>
-          <div className="hidden min-[1100px]:block">
-            <DesktopPoster />
-          </div>
+          {(wide === null || !wide) && (
+            <div key="mobile" className={wide === null ? "min-[1100px]:hidden" : undefined}>
+              <MobileHome />
+            </div>
+          )}
+          {(wide === null || wide) && (
+            <div key="desktop" className={wide === null ? "hidden min-[1100px]:block" : undefined}>
+              <DesktopPoster />
+            </div>
+          )}
         </>
       ) : (
         <Section />
       )}
-      {screen === "home" ? (
-        <div className="min-[1100px]:hidden">
+      {screen === "home" && wide !== true ? (
+        <div className={wide === null ? "min-[1100px]:hidden" : undefined}>
           <NowBar />
         </div>
-      ) : (
-        <NowBar />
-      )}
+      ) : null}
+      {screen !== "home" ? <NowBar /> : null}
       {playerOpen && <FullPlayer />}
       {notice && (
         <p className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-paper px-4 py-2 text-sm font-bold text-ink">
@@ -381,12 +399,17 @@ function useGaze(enabled: boolean) {
 
 function Hero({ compact = false }: { compact?: boolean }) {
   const playing = usePlayer((s) => s.playing);
+  const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const shownRef = useRef(false);
   const [reduce, setReduce] = useState(false);
   const [shown, setShown] = useState(false);
+  const [armed, setArmed] = useState(false);
   const gaze = useGaze(!reduce);
+  useEffect(() => {
+    if (playing) setArmed(true);
+  }, [playing]);
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setReduce(media.matches);
@@ -397,8 +420,9 @@ function Hero({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-    const visible = canvas.getClientRects().length > 0 || compact;
+    const root = rootRef.current;
+    if (!video || !canvas || !root) return;
+    const visible = root.getClientRects().length > 0;
     if (!(playing && visible && !reduce)) {
       video.pause();
       shownRef.current = false;
@@ -407,54 +431,110 @@ function Hero({ compact = false }: { compact?: boolean }) {
     }
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
+    if (!video.getAttribute("src")) video.src = "/art/dance-green.mp4";
     let frame = 0;
     let alive = true;
-    const paint = () => {
+    let onscreen = true;
+    let last = 0;
+    let draws = 0;
+    let color = "";
+    let pr = 0x1e;
+    let pg = 0xd7;
+    let pb = 0x60;
+    let image: ImageData | null = null;
+    const frameGap = 1000 / 30;
+    const paint = (now: number) => {
       if (!alive) return;
-      if (video.currentTime > 1.2) video.currentTime = 0.02;
-      if (video.readyState >= 2 && video.videoWidth) {
-        if (canvas.width !== video.videoWidth) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-        }
-        const raw = getComputedStyle(document.documentElement).getPropertyValue("--color-panel").trim();
-        const hex = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "#1ed760";
-        const pr = parseInt(hex.slice(1, 3), 16);
-        const pg = parseInt(hex.slice(3, 5), 16);
-        const pb = parseInt(hex.slice(5, 7), 16);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const shot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const px = shot.data;
-        for (let i = 0; i < px.length; i += 4) {
-          const r = px[i] ?? 0;
-          const g = px[i + 1] ?? 0;
-          const b = px[i + 2] ?? 0;
-          const score = g - (r > b ? r : b);
-          if (g > 50 && score > 28) {
-            const t = score >= 96 ? 1 : (score - 28) / 68;
-            px[i] = Math.round(r * (1 - t) + pr * t);
-            px[i + 1] = Math.round(g * (1 - t) + pg * t);
-            px[i + 2] = Math.round(b * (1 - t) + pb * t);
-          }
-        }
-        ctx.putImageData(shot, 0, 0);
-        if (!shownRef.current) {
-          shownRef.current = true;
-          setShown(true);
-        }
+      if (document.hidden || !onscreen) {
+        frame = 0;
+        return;
       }
       frame = requestAnimationFrame(paint);
+      if (now - last < frameGap) return;
+      last = now;
+      if (video.currentTime > 1.2) video.currentTime = 0.02;
+      if (video.readyState < 2 || !video.videoWidth) return;
+      const box = canvas.getBoundingClientRect();
+      if (box.width < 2 || box.height < 2) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.max(2, Math.round(box.width * dpr));
+      const h = Math.max(2, Math.round(box.height * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        image = null;
+      }
+      const raw = getComputedStyle(document.documentElement).getPropertyValue("--color-panel").trim();
+      const hex = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "#1ed760";
+      if (hex !== color) {
+        color = hex;
+        pr = parseInt(hex.slice(1, 3), 16);
+        pg = parseInt(hex.slice(3, 5), 16);
+        pb = parseInt(hex.slice(5, 7), 16);
+      }
+      const srcW = video.videoWidth;
+      const srcH = video.videoHeight;
+      const scale = Math.max(w / srcW, h / srcH);
+      const cropW = w / scale;
+      const cropH = h / scale;
+      const sx = (srcW - cropW) * 0.5;
+      const sy = (srcH - cropH) * 0.08;
+      ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, w, h);
+      image = ctx.getImageData(0, 0, w, h);
+      const px = image.data;
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i] ?? 0;
+        const g = px[i + 1] ?? 0;
+        const b = px[i + 2] ?? 0;
+        const score = g - (r > b ? r : b);
+        if (g > 50 && score > 28) {
+          const blend = score >= 96 ? 1 : (score - 28) / 68;
+          px[i] = Math.round(r * (1 - blend) + pr * blend);
+          px[i + 1] = Math.round(g * (1 - blend) + pg * blend);
+          px[i + 2] = Math.round(b * (1 - blend) + pb * blend);
+        }
+      }
+      ctx.putImageData(image, 0, 0);
+      draws += 1;
+      (canvas as HTMLCanvasElement & { draws?: number }).draws = draws;
+      if (!shownRef.current) {
+        shownRef.current = true;
+        setShown(true);
+      }
     };
+    const hold = () => {
+      video.pause();
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+    };
+    const resume = () => {
+      if (!alive || document.hidden || !onscreen) return;
+      void video.play().catch(() => setShown(false));
+      if (!frame) frame = requestAnimationFrame(paint);
+    };
+    const io = new IntersectionObserver(([entry]) => {
+      onscreen = !!entry?.isIntersecting;
+      if (!onscreen) hold();
+      else resume();
+    }, { threshold: 0.05 });
+    io.observe(root);
+    const onVis = () => {
+      if (document.hidden) hold();
+      else resume();
+    };
+    document.addEventListener("visibilitychange", onVis);
     video.playbackRate = 0.7;
     if (video.currentTime > 1.2) video.currentTime = 0;
     void video.play().catch(() => setShown(false));
     frame = requestAnimationFrame(paint);
     return () => {
       alive = false;
-      cancelAnimationFrame(frame);
+      if (frame) cancelAnimationFrame(frame);
+      io.disconnect();
+      document.removeEventListener("visibilitychange", onVis);
       video.pause();
     };
-  }, [playing, reduce, compact]);
+  }, [playing, reduce, compact, armed]);
   const word = compact ? "text-[3.4rem]" : "text-[7.2rem]";
   const look = reduce
     ? undefined
@@ -464,7 +544,7 @@ function Hero({ compact = false }: { compact?: boolean }) {
         transition: "transform 200ms ease-out",
       };
   return (
-    <div className={`pointer-events-none relative ${compact ? "h-[430px]" : "h-[680px]"}`}>
+    <div ref={rootRef} className={`pointer-events-none relative ${compact ? "h-[430px]" : "h-[680px]"}`}>
       <div className={`absolute inset-x-0 z-[5] flex items-start justify-between font-display leading-[0.78] text-paper ${compact ? "top-[44%] px-1" : "top-[42%] px-4 pr-[20%]"} ${word}`}>
         <span>MEL</span>
         <span>OBI</span>
@@ -482,12 +562,14 @@ function Hero({ compact = false }: { compact?: boolean }) {
           />
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 h-full w-full object-cover object-[center_8%] transition-opacity duration-500"
+            className="absolute inset-0 h-full w-full transition-opacity duration-500"
             style={{ opacity: shown && !reduce ? 1 : 0 }}
           />
         </div>
       </div>
-      <video ref={videoRef} src="/art/dance-green.mp4" muted loop playsInline preload="auto" className="pointer-events-none absolute size-px opacity-0" />
+      {armed ? (
+        <video ref={videoRef} muted loop playsInline preload="none" className="pointer-events-none absolute size-px opacity-0" />
+      ) : null}
     </div>
   );
 }
