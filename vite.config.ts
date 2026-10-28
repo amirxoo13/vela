@@ -142,6 +142,14 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+/** Dev/preview proxy so the browser calls same-origin `/api/v1` and the token stays on the API. */
+function musicApiProxy() {
+  const target = process.env.API_PROXY_TARGET || "http://127.0.0.1:8787";
+  return {
+    "/api/v1": { target, changeOrigin: true },
+  };
+}
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
@@ -150,11 +158,13 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+    proxy: musicApiProxy(),
   },
   preview: {
     host: "127.0.0.1",
     port: 8081,
     strictPort: true,
+    proxy: musicApiProxy(),
   },
   resolve: { tsconfigPaths: true },
   plugins: [
