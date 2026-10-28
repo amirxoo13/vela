@@ -397,6 +397,34 @@ function useGaze(enabled: boolean) {
   return enabled ? gaze : { x: 0, y: 0 };
 }
 
+/** How much of this pixel is green-screen, 0–1. The first branch matches the original cut. */
+function greenCoverage(r: number, g: number, b: number) {
+  const other = r > b ? r : b;
+  const score = g - other;
+  if (g > 50 && score > 28) return score >= 96 ? 1 : (score - 28) / 68;
+  if (g < 90 || g <= r || g <= b) return 0;
+  const low = r < b ? r : b;
+  const delta = g - low;
+  if (delta < 40) return 0;
+  let hue = (60 * (b - r)) / delta;
+  if (hue < 0) hue += 360;
+  const sat = delta / g;
+  if (hue < 80 || hue > 160 || sat < 0.5) return 0;
+  return Math.min(1, (sat - 0.35) * 1.6);
+}
+
+function parsePanel(raw: string): [number, number, number] | null {
+  const text = raw.trim();
+  const hex = /^#([0-9a-fA-F]{6})$/.exec(text);
+  if (hex?.[1]) {
+    const n = hex[1];
+    return [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)];
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i.exec(text);
+  if (!rgb) return null;
+  return [Math.round(Number(rgb[1])), Math.round(Number(rgb[2])), Math.round(Number(rgb[3]))];
+}
+
 function Hero({ compact = false }: { compact?: boolean }) {
   const playing = usePlayer((s) => s.playing);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -429,20 +457,30 @@ function Hero({ compact = false }: { compact?: boolean }) {
       setShown(false);
       return;
     }
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
+    const ctx = canvas.getContext("2d");
+    const scratch = document.createElement("canvas");
+    const sctx = scratch.getContext("2d", { willReadFrequently: true });
+    if (!ctx || !sctx) return;
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
     if (!video.getAttribute("src")) video.src = "/art/dance-green.mp4";
     let frame = 0;
     let alive = true;
     let onscreen = true;
     let last = 0;
     let draws = 0;
+    let failures = 0;
     let color = "";
     let pr = 0x1e;
     let pg = 0xd7;
     let pb = 0x60;
     let image: ImageData | null = null;
     const frameGap = 1000 / 30;
+    const hide = () => {
+      if (!shownRef.current) return;
+      shownRef.current = false;
+      setShown(false);
+    };
     const paint = (now: number) => {
       if (!alive) return;
       if (document.hidden || !onscreen) {
@@ -459,18 +497,20 @@ function Hero({ compact = false }: { compact?: boolean }) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = Math.max(2, Math.round(box.width * dpr));
       const h = Math.max(2, Math.round(box.height * dpr));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
+      if (scratch.width !== w || scratch.height !== h) {
+        scratch.width = w;
+        scratch.height = h;
         image = null;
       }
-      const raw = getComputedStyle(document.documentElement).getPropertyValue("--color-panel").trim();
-      const hex = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "#1ed760";
-      if (hex !== color) {
-        color = hex;
-        pr = parseInt(hex.slice(1, 3), 16);
-        pg = parseInt(hex.slice(3, 5), 16);
-        pb = parseInt(hex.slice(5, 7), 16);
+      const raw = getComputedStyle(canvas).getPropertyValue("--color-panel");
+      if (raw !== color) {
+        const parsed = parsePanel(raw);
+        if (parsed) {
+          color = raw;
+          pr = parsed[0];
+          pg = parsed[1];
+          pb = parsed[2];
+        }
       }
       const srcW = video.videoWidth;
       const srcH = video.videoHeight;
@@ -479,22 +519,46 @@ function Hero({ compact = false }: { compact?: boolean }) {
       const cropH = h / scale;
       const sx = (srcW - cropW) * 0.5;
       const sy = (srcH - cropH) * 0.08;
-      ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, w, h);
-      image = ctx.getImageData(0, 0, w, h);
+      try {
+        sctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, w, h);
+        image = sctx.getImageData(0, 0, w, h);
+      } catch {
+        failures += 1;
+        hide();
+        if (failures > 8) {
+          alive = false;
+          video.pause();
+          if (frame) cancelAnimationFrame(frame);
+          frame = 0;
+        }
+        return;
+      }
       const px = image.data;
+      let matted = 0;
       for (let i = 0; i < px.length; i += 4) {
         const r = px[i] ?? 0;
         const g = px[i + 1] ?? 0;
         const b = px[i + 2] ?? 0;
-        const score = g - (r > b ? r : b);
-        if (g > 50 && score > 28) {
-          const blend = score >= 96 ? 1 : (score - 28) / 68;
-          px[i] = Math.round(r * (1 - blend) + pr * blend);
-          px[i + 1] = Math.round(g * (1 - blend) + pg * blend);
-          px[i + 2] = Math.round(b * (1 - blend) + pb * blend);
-        }
+        const amount = greenCoverage(r, g, b);
+        if (amount <= 0) continue;
+        if (amount >= 0.95) matted += 1;
+        const keep = 1 - amount;
+        px[i] = Math.round(r * keep + pr * amount);
+        px[i + 1] = Math.round(g * keep + pg * amount);
+        px[i + 2] = Math.round(b * keep + pb * amount);
       }
-      ctx.putImageData(image, 0, 0);
+      // An unkeyed or unreadable frame stays off the visible canvas. The still remains.
+      if (matted < (w * h) * 0.08) {
+        hide();
+        return;
+      }
+      failures = 0;
+      sctx.putImageData(image, 0, 0);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      ctx.drawImage(scratch, 0, 0);
       draws += 1;
       (canvas as HTMLCanvasElement & { draws?: number }).draws = draws;
       if (!shownRef.current) {
@@ -568,7 +632,17 @@ function Hero({ compact = false }: { compact?: boolean }) {
         </div>
       </div>
       {armed ? (
-        <video ref={videoRef} muted loop playsInline preload="none" className="pointer-events-none absolute size-px opacity-0" />
+        <video
+          ref={videoRef}
+          muted
+          loop
+          playsInline
+          preload="none"
+          disablePictureInPicture
+          aria-hidden
+          className="pointer-events-none"
+          style={{ position: "fixed", width: 2, height: 2, left: -9999, top: 0, opacity: 0 }}
+        />
       ) : null}
     </div>
   );
