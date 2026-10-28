@@ -1,3 +1,4 @@
+import { relayMediaUrl } from "@/lib/media-relay";
 import { bindMedia } from "@/lib/tone";
 
 type Listener = {
@@ -62,10 +63,11 @@ function waitForMetadata(node: HTMLAudioElement) {
 
 export async function playMedia(url: string, position: number) {
   if (!el || !url) throw new Error("Nothing to play");
+  const src = relayMediaUrl(url);
   bindMedia(el);
-  const absolute = new URL(url, window.location.href).href;
+  const absolute = new URL(src, window.location.href).href;
   if (el.src !== absolute) {
-    el.src = url;
+    el.src = src;
     await waitForMetadata(el);
   }
   seekMedia(position);

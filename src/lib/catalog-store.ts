@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { relayMediaUrl } from "@/lib/media-relay";
 import {
   collectTracks,
   english,
@@ -137,7 +138,8 @@ const emptySearch: SearchView = {
 function httpUrl(value: unknown): string {
   if (typeof value !== "string") return "";
   const text = value.trim();
-  return /^https?:\/\//i.test(text) ? text : "";
+  if (!/^https?:\/\//i.test(text)) return "";
+  return relayMediaUrl(text);
 }
 
 function yearOf(value: unknown): string {

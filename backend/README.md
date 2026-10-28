@@ -29,6 +29,7 @@ Stop the background server: `kill $(cat server.pid)`.
 | `UPSTREAM_BASE_URL` | https://api.one-api.ir/radiojavan/v1 | Upstream base |
 | `UPSTREAM_TIMEOUT_MS` | 10000 | Timeout for upstream JSON calls |
 | `MEDIA_TIMEOUT_MS` | 15000 | Timeout to get response headers from media CDN |
+| `MEDIA_RELAY_BASE` | empty | When set (e.g. `https://relay.example/m`), download/inline fetches `${MEDIA_RELAY_BASE}/<host>/<path>?<query>` instead of the CDN. The host allowlist still checks the original media host. |
 | `CACHE_TTL_SECONDS` | 180 | Cache TTL for lists (home, search, trending, ...) |
 | `ITEM_CACHE_TTL_SECONDS` | 900 | Cache TTL for single items (track, album, ...); download/seek requests reuse it |
 | `CACHE_MAX_ENTRIES` | 500 | Max cache entries |

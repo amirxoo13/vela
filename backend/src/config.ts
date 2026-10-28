@@ -11,6 +11,8 @@ export const config = {
   upstreamBaseUrl: (process.env.UPSTREAM_BASE_URL || 'https://api.one-api.ir/radiojavan/v1').replace(/\/+$/, ''),
   upstreamTimeoutMs: num(process.env.UPSTREAM_TIMEOUT_MS, 10_000),
   mediaTimeoutMs: num(process.env.MEDIA_TIMEOUT_MS, 15_000),
+  /** External relay prefix, no trailing slash. Empty fetches the CDN directly. */
+  mediaRelayBase: (process.env.MEDIA_RELAY_BASE || '').trim().replace(/\/+$/, ''),
   listTtlMs: num(process.env.CACHE_TTL_SECONDS, 180) * 1000,
   itemTtlMs: num(process.env.ITEM_CACHE_TTL_SECONDS, 900) * 1000,
   cacheMaxEntries: num(process.env.CACHE_MAX_ENTRIES, 500),

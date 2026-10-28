@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { trackById, useCatalog, type Track } from "@/lib/catalog-store";
+import { relayMediaUrl } from "@/lib/media-relay";
 
 export type HistoryItem = {
   id: string;
@@ -48,9 +49,9 @@ function snapshotOf(track: Track): HistoryItem | null {
     id: track.id,
     title: track.title,
     artist: track.artist,
-    cover: track.cover,
+    cover: relayMediaUrl(track.cover),
     duration: track.duration,
-    streamUrl: track.streamUrl,
+    streamUrl: relayMediaUrl(track.streamUrl),
     downloadPath: track.downloadPath,
     at: Date.now(),
   };
@@ -70,7 +71,16 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       }
       const data = JSON.parse(raw) as { history?: HistoryItem[]; playlists?: UserPlaylist[] };
       set({
-        history: Array.isArray(data.history) ? data.history.filter((item) => item?.id && item.title).slice(0, 80) : [],
+        history: Array.isArray(data.history)
+          ? data.history
+              .filter((item) => item?.id && item.title)
+              .slice(0, 80)
+              .map((item) => ({
+                ...item,
+                cover: relayMediaUrl(item.cover || ""),
+                streamUrl: relayMediaUrl(item.streamUrl || ""),
+              }))
+          : [],
         playlists: Array.isArray(data.playlists)
           ? data.playlists.filter((item) => item?.id && typeof item.name === "string")
           : [],

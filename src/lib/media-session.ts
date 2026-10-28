@@ -1,12 +1,14 @@
 import { mediaDuration } from "@/lib/audio-engine";
 import { albumById, trackById } from "@/lib/catalog-store";
+import { relayMediaUrl } from "@/lib/media-relay";
 import { usePlayer } from "@/lib/player-store";
 import { pauseStageVideo, stageVideoElement, stageVideoPlaying } from "@/lib/stage-video";
 
 function artwork(src: string): MediaImage[] {
-  if (!src) return [];
+  const relayed = relayMediaUrl(src);
+  if (!relayed) return [];
   return [96, 128, 192, 256, 512].map((size) => ({
-    src,
+    src: relayed,
     sizes: `${size}x${size}`,
     type: "image/jpeg",
   }));

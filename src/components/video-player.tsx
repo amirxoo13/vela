@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Video } from "@/lib/catalog-store";
 import { pauseMedia } from "@/lib/audio-engine";
+import { nativeHlsSource } from "@/lib/hls-relay";
+import { mediaRelayEnabled, relayMediaUrl } from "@/lib/media-relay";
 import { syncVideoSession } from "@/lib/media-session";
 import { usePlayer } from "@/lib/player-store";
 import { bindStageVideo, releaseStageVideo } from "@/lib/stage-video";
@@ -12,15 +14,21 @@ function isHls(url: string) {
 
 /**
  * Visible music video. MP4 plays natively. HLS uses the browser, or hls.js
- * when the WebView has no native HLS. The song player is paused while this runs.
+ * when the WebView has no native HLS. With the media relay enabled, hls.js
+ * runs first so playlist, segment, and key URLs are rewritten; Safari without
+ * Media Source falls back to a rewritten playlist. The song player is paused
+ * while this runs.
  */
 export function VideoPlayer({ video, autoPlay = false }: { video: Video; autoPlay?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [paused, setPaused] = useState(true);
-  const src = !isHls(video.mediaUrl) && video.mediaUrl ? video.mediaUrl : "";
-  const hlsUrl = video.hlsUrl || (isHls(video.mediaUrl) ? video.mediaUrl : "");
+  const rawSrc = !isHls(video.mediaUrl) && video.mediaUrl ? video.mediaUrl : "";
+  const rawHls = video.hlsUrl || (isHls(video.mediaUrl) ? video.mediaUrl : "");
+  const src = rawSrc ? relayMediaUrl(rawSrc) : "";
+  const hlsUrl = rawHls ? relayMediaUrl(rawHls) : "";
+  const poster = video.image ? relayMediaUrl(video.image) : "";
 
   useEffect(() => {
     const node = ref.current;
@@ -29,17 +37,18 @@ export function VideoPlayer({ video, autoPlay = false }: { video: Video; autoPla
     setError("");
     let dead = false;
     let hls: { destroy: () => void } | null = null;
+    let revokeNative: () => void = () => undefined;
 
     const silenceMusic = () => {
       setPaused(false);
       stopBeat();
       pauseMedia();
       if (usePlayer.getState().playing) usePlayer.setState({ playing: false });
-      syncVideoSession(video.title, video.meta, video.image, true);
+      syncVideoSession(video.title, video.meta, poster, true);
     };
     const onPause = () => {
       setPaused(true);
-      syncVideoSession(video.title, video.meta, video.image, false);
+      syncVideoSession(video.title, video.meta, poster, false);
     };
     node.addEventListener("play", silenceMusic);
     node.addEventListener("pause", onPause);
@@ -55,22 +64,46 @@ export function VideoPlayer({ video, autoPlay = false }: { video: Video; autoPla
       } else if (!hlsUrl) {
         setError("This video has no stream");
         return;
-      } else if (node.canPlayType("application/vnd.apple.mpegurl")) {
+      } else if (!mediaRelayEnabled() && node.canPlayType("application/vnd.apple.mpegurl")) {
         node.src = hlsUrl;
       } else {
         const { default: Hls } = await import("hls.js");
         if (dead) return;
-        if (!Hls.isSupported()) {
+        if (Hls.isSupported()) {
+          const player = new Hls({
+            enableWorker: true,
+            capLevelToPlayerSize: true,
+            ...(mediaRelayEnabled()
+              ? {
+                  xhrSetup: (_xhr: XMLHttpRequest, _url: string, context: { url: string }) => {
+                    context.url = relayMediaUrl(context.url);
+                  },
+                  fetchSetup: (context: { url: string }, initParams: RequestInit) => {
+                    const url = relayMediaUrl(context.url);
+                    context.url = url;
+                    return new Request(url, initParams);
+                  },
+                }
+              : {}),
+          });
+          hls = player;
+          player.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) setError("Couldn't play this video");
+          });
+          player.loadSource(hlsUrl);
+          player.attachMedia(node);
+        } else if (node.canPlayType("application/vnd.apple.mpegurl")) {
+          const prepared = await nativeHlsSource(rawHls || hlsUrl);
+          if (dead) {
+            prepared.revoke();
+            return;
+          }
+          revokeNative = prepared.revoke;
+          node.src = prepared.src;
+        } else {
           setError("This browser cannot play this video");
           return;
         }
-        const player = new Hls({ enableWorker: true, capLevelToPlayerSize: true });
-        hls = player;
-        player.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) setError("Couldn't play this video");
-        });
-        player.loadSource(hlsUrl);
-        player.attachMedia(node);
       }
       if (autoPlay) {
         const start = () => {
@@ -87,9 +120,10 @@ export function VideoPlayer({ video, autoPlay = false }: { video: Video; autoPla
       node.removeEventListener("play", silenceMusic);
       node.removeEventListener("pause", onPause);
       hls?.destroy();
+      revokeNative();
       releaseStageVideo(node);
     };
-  }, [video.id, video.title, video.meta, video.image, src, hlsUrl, attempt, autoPlay]);
+  }, [video.id, video.title, video.meta, poster, src, hlsUrl, rawHls, attempt, autoPlay]);
 
   return (
     <div className="relative overflow-hidden rounded-3xl bg-ink">
@@ -97,7 +131,7 @@ export function VideoPlayer({ video, autoPlay = false }: { video: Video; autoPla
         ref={ref}
         controls
         playsInline
-        poster={video.image || undefined}
+        poster={poster || undefined}
         preload="metadata"
         className="aspect-video w-full bg-ink"
         aria-label={video.title || "Video"}
