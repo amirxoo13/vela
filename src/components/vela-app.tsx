@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -7,6 +7,9 @@ import {
   Pause,
   Play,
   Plus,
+  Repeat,
+  Repeat1,
+  Shuffle,
   SkipBack,
   SkipForward,
   Ticket,
@@ -21,12 +24,13 @@ import {
   type Story,
   type Track,
 } from "@/lib/catalog-store";
+import { resolveListenTrack, useLibrary, type HistoryItem, type UserPlaylist } from "@/lib/library";
 import { downloadHref, getData } from "@/lib/music-api";
 import { levels } from "@/lib/tone";
-import { usePlayer, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
+import { usePlayer, type RepeatMode, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
 import { Logo, StickerGlyph } from "@/components/mark";
 
-const glass = "rounded-3xl border border-line bg-glass/80 text-paper";
+const glass = "glass-card rounded-3xl text-paper";
 const kinds: StickerKind[] = ["star", "bolt", "flame", "disc", "spark", "moon", "heart", "drop"];
 
 export function VelaApp() {
@@ -69,6 +73,9 @@ export function VelaApp() {
 
 function Engine() {
   const ref = useRef<HTMLAudioElement>(null);
+  const trackId = usePlayer((s) => s.trackId);
+  const playing = usePlayer((s) => s.playing);
+  const track = useCatalog((s) => s.trackMap[trackId]);
   useEffect(() => {
     mountAudio(ref.current, {
       onTime: (seconds) => {
@@ -84,6 +91,7 @@ function Engine() {
       },
     });
     usePlayer.getState().hydrate();
+    useLibrary.getState().hydrate();
     void useCatalog.getState().load().then(() => {
       const catalog = useCatalog.getState();
       const player = usePlayer.getState();
@@ -111,11 +119,54 @@ function Engine() {
       if (e.code === "Space") {
         e.preventDefault();
         usePlayer.getState().togglePlay();
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        usePlayer.getState().seek(usePlayer.getState().position + 5);
+        usePlayer.getState().endScrub();
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        usePlayer.getState().seek(usePlayer.getState().position - 5);
+        usePlayer.getState().endScrub();
+      } else if (e.key === "n" || e.key === "N") {
+        usePlayer.getState().next();
+      } else if (e.key === "p" || e.key === "P") {
+        usePlayer.getState().prev();
+      } else if (e.key === "l" || e.key === "L") {
+        usePlayer.getState().toggleLike();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    const current = track ?? useCatalog.getState().trackMap[trackId];
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: current?.title || "Melobi",
+        artist: current?.artist || "Melobi",
+        album: "Melobi",
+        artwork: current?.cover ? [{ src: current.cover }] : [],
+      });
+      navigator.mediaSession.playbackState = playing ? "playing" : "paused";
+      navigator.mediaSession.setActionHandler("play", () => {
+        if (!usePlayer.getState().playing) usePlayer.getState().togglePlay();
+      });
+      navigator.mediaSession.setActionHandler("pause", () => {
+        if (usePlayer.getState().playing) usePlayer.getState().togglePlay();
+      });
+      navigator.mediaSession.setActionHandler("nexttrack", () => usePlayer.getState().next());
+      navigator.mediaSession.setActionHandler("previoustrack", () => usePlayer.getState().prev());
+      navigator.mediaSession.setActionHandler("seekto", (details) => {
+        if (typeof details.seekTime === "number") {
+          usePlayer.getState().seek(details.seekTime);
+          usePlayer.getState().endScrub();
+        }
+      });
+    } catch {
+      /* metadata artwork can reject a cross-origin URL */
+    }
+  }, [track, trackId, playing]);
   return (
     <audio
       ref={ref}
@@ -126,41 +177,70 @@ function Engine() {
   );
 }
 
+function ScenePanel({ children, cutout = false, notch = true }: { children: ReactNode; cutout?: boolean; notch?: boolean }) {
+  const raw = useId().replace(/:/g, "");
+  const id = `scene-${raw}`;
+  return (
+    <div className="scene-glow relative">
+      <svg width="0" height="0" className="absolute" aria-hidden>
+        <mask id={id} maskUnits="objectBoundingBox" maskContentUnits="objectBoundingBox">
+          <rect width="1" height="1" rx="0.04" ry="0.055" fill="white" />
+          {notch ? <rect x="0.18" y="-0.002" width="0.64" height="0.07" rx="0.035" ry="0.045" fill="black" /> : null}
+          {cutout ? <rect x="0.68" y="0.76" width="0.34" height="0.26" rx="0.05" ry="0.07" fill="black" /> : null}
+        </mask>
+      </svg>
+      <div
+        className="bg-panel shadow-[0_28px_70px_rgb(0_0_0/42%)]"
+        style={{ mask: `url(#${id})`, WebkitMask: `url(#${id})` }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function MobileHome() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
-    <div className="mx-auto w-full max-w-[480px] px-3 pb-28 pt-3">
-      <div className="rounded-[28px] bg-panel px-3 pb-4 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <Logo onClick={() => setScreen("home")} />
-          <TourPill />
+    <div className="relative mx-auto w-full max-w-[480px] px-3 pb-28 pt-6">
+      <ScenePanel notch={false}>
+        <div className="relative px-3 pb-4 pt-12">
+          <div className="flex items-center justify-between gap-3">
+            <Logo onClick={() => setScreen("home")} />
+            <TourPill />
+          </div>
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            <Chip label="Search" onClick={() => setScreen("search")} />
+            <Chip label="Albums" onClick={() => setScreen("albums")} />
+            <Chip label="Videos" onClick={() => setScreen("videos")} />
+            <Chip label="Socials" onClick={() => setScreen("socials")} />
+            <Chip label="History" onClick={() => setScreen("history")} />
+            <Chip label="Playlists" onClick={() => setScreen("playlists")} />
+            <Chip label="Favorites" onClick={() => setScreen("favorites")} />
+          </div>
+          <ThemeSwitch />
+          <div className="relative">
+            <Hero compact />
+            <div className="relative z-30 -mt-40 flex flex-col gap-3">
+              <LiveCard />
+              <PlayerCard />
+              <AlbumsCard />
+              <button
+                type="button"
+                onClick={() => setScreen("editor")}
+                className={`${glass} flex items-center justify-between px-4 py-3 text-left`}
+              >
+                <span>
+                  <span className="block text-sm font-extrabold">Create cover art</span>
+                  <span className="text-xs text-mute">Stickers stay on this device</span>
+                </span>
+                <Plus className="size-5" />
+              </button>
+              <TourCard />
+            </div>
+          </div>
         </div>
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-          <Chip label="Search" onClick={() => setScreen("search")} />
-          <Chip label="Albums" onClick={() => setScreen("albums")} />
-          <Chip label="Videos" onClick={() => setScreen("videos")} />
-          <Chip label="Socials" onClick={() => setScreen("socials")} />
-        </div>
-        <ThemeSwitch />
-        <Hero compact />
-        <div className="relative z-10 -mt-6 flex flex-col gap-3">
-          <LiveCard />
-          <PlayerCard />
-          <AlbumsCard />
-          <button
-            type="button"
-            onClick={() => setScreen("editor")}
-            className={`${glass} flex items-center justify-between px-4 py-3 text-left`}
-          >
-            <span>
-              <span className="block text-sm font-extrabold">Create cover art</span>
-              <span className="text-xs text-mute">Stickers stay on this device</span>
-            </span>
-            <Plus className="size-5" />
-          </button>
-          <TourCard />
-        </div>
-      </div>
+      </ScenePanel>
     </div>
   );
 }
@@ -168,49 +248,51 @@ function MobileHome() {
 function DesktopPoster() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
-    <div className="mx-auto max-w-[1240px] px-6 py-6">
-      <div className="relative">
-        <div className="relative z-20 mx-auto -mb-7 flex w-fit items-center gap-6 rounded-b-[28px] bg-ink px-6 pb-4 pt-3">
-          <NavText />
-          <TourPill />
-          <ThemeSwitch />
-        </div>
-        <div className="rounded-[36px] bg-panel p-4 pt-12">
-          <div className="grid grid-cols-[270px_minmax(0,1fr)_290px] items-start gap-4">
-            <div className="flex flex-col gap-4">
-              <Logo onClick={() => setScreen("home")} />
-              <LiveCard />
-              <div className={glass + " p-3"}>
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-extrabold">Create cover art</p>
-                  <button type="button" onClick={() => setScreen("socials")} className="rounded-full bg-paper/15 px-2 py-1 text-xs font-bold">
-                    Explore
-                  </button>
-                </div>
-                <CoverStage tall={false} />
-                <StickerTray />
-              </div>
-            </div>
-            <div className="relative min-h-[620px]">
-              <Hero />
-              <div className="absolute bottom-2 left-1/2 z-20 w-[min(100%,420px)] -translate-x-1/2">
-                <AlbumsCard />
-              </div>
-              <button
-                type="button"
-                aria-label="Open cover lab"
-                onClick={() => setScreen("editor")}
-                className="absolute bottom-8 right-0 z-20 grid size-12 place-items-center rounded-full bg-deep text-paper"
-              >
-                <Plus />
+    <div className="relative mx-auto max-w-[1240px] px-6 pb-10 pt-8">
+      <div className="absolute left-1/2 top-3 z-40 flex max-w-[92%] -translate-x-1/2 flex-wrap items-center justify-center gap-3 rounded-b-[28px] bg-ink px-5 pb-3 pt-2 shadow-[0_12px_30px_rgb(0_0_0/45%)]">
+        <NavText />
+        <TourPill />
+        <ThemeSwitch />
+      </div>
+      <ScenePanel cutout>
+        <div className="relative min-h-[780px]">
+          <div className="absolute left-5 top-6 z-30">
+            <Logo onClick={() => setScreen("home")} />
+          </div>
+          <div className="pointer-events-none absolute inset-x-8 top-2 z-0">
+            <Hero />
+          </div>
+          <div className="absolute left-4 top-24 z-30 w-[250px]">
+            <LiveCard />
+          </div>
+          <div className={`${glass} absolute bottom-24 left-5 z-30 w-[230px] p-3`}>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-extrabold">Create cover art</p>
+              <button type="button" onClick={() => setScreen("socials")} className="rounded-full bg-paper/15 px-2 py-1 text-xs font-bold">
+                Explore
               </button>
             </div>
-            <div className="flex flex-col gap-4">
-              <PlayerCard />
-              <TourCard />
-            </div>
+            <CoverStage tall={false} />
+            <StickerTray />
           </div>
+          <div className="absolute bottom-8 left-1/2 z-30 w-[min(46%,400px)] -translate-x-1/2">
+            <AlbumsCard />
+          </div>
+          <div className="absolute right-8 top-8 z-30 w-[240px]">
+            <PlayerCard />
+          </div>
+          <button
+            type="button"
+            aria-label="Open cover lab"
+            onClick={() => setScreen("editor")}
+            className="absolute bottom-28 right-8 z-30 grid size-12 place-items-center rounded-full bg-deep text-paper shadow-lg"
+          >
+            <Plus />
+          </button>
         </div>
+      </ScenePanel>
+      <div className="absolute bottom-2 right-6 z-40 w-[250px]">
+        <TourCard />
       </div>
     </div>
   );
@@ -219,11 +301,14 @@ function DesktopPoster() {
 function NavText() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
-    <nav className="flex items-center gap-6 text-sm font-semibold">
+    <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm font-semibold">
       <button type="button" onClick={() => setScreen("search")}>Search</button>
       <button type="button" onClick={() => setScreen("albums")}>Albums</button>
       <button type="button" onClick={() => setScreen("videos")}>Videos</button>
       <button type="button" onClick={() => setScreen("socials")}>Socials</button>
+      <button type="button" onClick={() => setScreen("history")}>History</button>
+      <button type="button" onClick={() => setScreen("playlists")}>Playlists</button>
+      <button type="button" onClick={() => setScreen("favorites")}>Favorites</button>
     </nav>
   );
 }
@@ -264,28 +349,60 @@ function ThemeSwitch() {
           aria-label={item.label}
           aria-pressed={theme === item.id}
           onClick={() => setTheme(item.id)}
-          className={`size-7 rounded-full border-2 ${item.swatch} ${theme === item.id ? "border-paper" : "border-transparent"}`}
+          className={`size-7 rounded-full border-2 ${item.swatch} ${theme === item.id ? "border-ink" : "border-transparent"}`}
         />
       ))}
     </div>
   );
 }
 
+function useGaze(enabled: boolean) {
+  const [gaze, setGaze] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    if (!enabled) return;
+    let frame = 0;
+    let next = { x: 0, y: 0 };
+    const onMove = (event: PointerEvent) => {
+      next = {
+        x: Math.max(-1, Math.min(1, (event.clientX / window.innerWidth) * 2 - 1)),
+        y: Math.max(-1, Math.min(1, (event.clientY / window.innerHeight) * 2 - 1)),
+      };
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setGaze(next));
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", onMove);
+    };
+  }, [enabled]);
+  return enabled ? gaze : { x: 0, y: 0 };
+}
+
 function Hero({ compact = false }: { compact?: boolean }) {
   const playing = usePlayer((s) => s.playing);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const shownRef = useRef(false);
   const [reduce, setReduce] = useState(false);
+  const [shown, setShown] = useState(false);
+  const gaze = useGaze(!reduce);
   useEffect(() => {
-    setReduce(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const apply = () => setReduce(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
   }, []);
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
-    const visible = canvas.getClientRects().length > 0;
+    const visible = canvas.getClientRects().length > 0 || compact;
     if (!(playing && visible && !reduce)) {
       video.pause();
+      shownRef.current = false;
+      setShown(false);
       return;
     }
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -294,13 +411,14 @@ function Hero({ compact = false }: { compact?: boolean }) {
     let alive = true;
     const paint = () => {
       if (!alive) return;
+      if (video.currentTime > 1.2) video.currentTime = 0.02;
       if (video.readyState >= 2 && video.videoWidth) {
         if (canvas.width !== video.videoWidth) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
         }
         const raw = getComputedStyle(document.documentElement).getPropertyValue("--color-panel").trim();
-        const hex = raw.startsWith("#") ? raw : "#1f7d42";
+        const hex = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "#1ed760";
         const pr = parseInt(hex.slice(1, 3), 16);
         const pg = parseInt(hex.slice(3, 5), 16);
         const pb = parseInt(hex.slice(5, 7), 16);
@@ -320,38 +438,56 @@ function Hero({ compact = false }: { compact?: boolean }) {
           }
         }
         ctx.putImageData(shot, 0, 0);
+        if (!shownRef.current) {
+          shownRef.current = true;
+          setShown(true);
+        }
       }
       frame = requestAnimationFrame(paint);
     };
-    void video.play().catch(() => {});
+    video.playbackRate = 0.7;
+    if (video.currentTime > 1.2) video.currentTime = 0;
+    void video.play().catch(() => setShown(false));
     frame = requestAnimationFrame(paint);
     return () => {
       alive = false;
       cancelAnimationFrame(frame);
       video.pause();
     };
-  }, [playing, reduce]);
-  const dance = playing && !reduce;
-  const word = compact ? "text-5xl" : "text-7xl";
-  const width = compact ? "max-w-[440px]" : "max-w-[560px]";
+  }, [playing, reduce, compact]);
+  const word = compact ? "text-[3.4rem]" : "text-[7.2rem]";
+  const look = reduce
+    ? undefined
+    : {
+        transform: `translate(${gaze.x * (compact ? 8 : 16)}px, ${gaze.y * 6}px) rotate(${gaze.x * 5.5}deg)`,
+        transformOrigin: "50% 20%",
+        transition: "transform 200ms ease-out",
+      };
   return (
-    <div className="relative">
-      <p className="relative z-20 text-xs font-extrabold tracking-[0.28em] text-paper/90">{dance ? "LIVE" : "MELOBI"}</p>
-      <div className="relative mt-1">
-        <div className="pointer-events-none absolute inset-x-0 top-1 z-0 flex items-start justify-between font-display leading-[0.82] text-paper">
-          <span className={word}>MEL</span>
-          <span className={word}>OBI</span>
-        </div>
-        <img
-          src="/art/hero-clay.png"
-          alt="Melobi"
-          className={`relative z-10 mx-auto block w-full ${width} ${dance ? "invisible" : ""}`}
-        />
-        {dance ? (
-          <canvas ref={canvasRef} className={`absolute left-1/2 top-0 z-10 h-full w-full ${width} -translate-x-1/2 object-contain`} />
-        ) : null}
-        <video ref={videoRef} src="/art/dance-green.mp4" muted loop playsInline preload="auto" className="pointer-events-none absolute size-px opacity-0" />
+    <div className={`pointer-events-none relative ${compact ? "h-[430px]" : "h-[680px]"}`}>
+      <div className={`absolute inset-x-0 z-[5] flex items-start justify-between font-display leading-[0.78] text-paper ${compact ? "top-[44%] px-1" : "top-[42%] px-4 pr-[20%]"} ${word}`}>
+        <span>MEL</span>
+        <span>OBI</span>
       </div>
+      <p className="absolute left-1/2 top-3 z-20 -translate-x-1/2 text-xs font-extrabold tracking-[0.28em] text-paper/90">
+        {playing ? "LIVE" : "MELOBI"}
+      </p>
+      <div className="absolute inset-x-[8%] top-0 z-10 h-[92%]" style={look}>
+        <div className={!playing && !reduce ? "idle-sway h-full" : "h-full"}>
+          <img
+            src="/art/hero-clay.png"
+            alt="Melobi"
+            className="absolute inset-0 h-full w-full object-cover object-[center_8%] transition-opacity duration-500"
+            style={{ opacity: shown && !reduce ? 0 : 1 }}
+          />
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 h-full w-full object-cover object-[center_8%] transition-opacity duration-500"
+            style={{ opacity: shown && !reduce ? 1 : 0 }}
+          />
+        </div>
+      </div>
+      <video ref={videoRef} src="/art/dance-green.mp4" muted loop playsInline preload="auto" className="pointer-events-none absolute size-px opacity-0" />
     </div>
   );
 }
@@ -446,11 +582,12 @@ function PlayerCard() {
           </button>
         </div>
       </div>
-      <button type="button" onClick={() => setPlayerOpen(true)} className="mx-auto block">
+      <button type="button" onClick={() => setPlayerOpen(true)} aria-label="Open player" className="relative mx-auto grid size-36 place-items-center min-[1100px]:size-28">
+        <span className="absolute inset-0 rounded-full bg-paper shadow-[0_10px_24px_rgb(0_0_0/35%)]" />
         {cover ? (
-          <img src={cover} alt="" className="mx-auto size-36 rounded-full bg-ink object-cover object-top min-[1100px]:size-28" />
+          <img src={cover} alt="" className={`relative size-[78%] rounded-full object-cover disc-spin ${playing ? "is-on" : ""}`} />
         ) : (
-          <span className="mx-auto block size-36 rounded-full bg-ink min-[1100px]:size-28" />
+          <span className="relative size-[78%] rounded-full bg-ink" />
         )}
       </button>
       <div className="mt-3 flex items-center justify-between px-6">
@@ -567,7 +704,7 @@ function TourCard() {
   const setScreen = usePlayer((s) => s.setScreen);
   const events = useCatalog((s) => s.events);
   return (
-    <article className="overflow-hidden rounded-3xl border border-line bg-glass/75">
+    <article className="glass-card overflow-hidden rounded-3xl">
       <button type="button" onClick={() => setScreen("tour")} className="block w-full text-left">
         <div className="relative">
           <img src="/art/stage.jpg" alt="" className="h-28 w-full object-cover object-top" />
@@ -686,6 +823,8 @@ function FullPlayer() {
             <SkipForward className="fill-current" />
           </button>
         </div>
+        <TransportModes />
+        <SaveToPlaylist trackId={track.id} />
         <p className="mt-4 text-center text-xs text-paper/75">{detail || "Now playing"}</p>
       </div>
     </div>
@@ -704,7 +843,11 @@ function Section() {
     screen === "videos" ? "Videos" :
     screen === "socials" ? "Socials" :
     screen === "tour" ? "World Tour" :
+    screen === "history" ? "History" :
+    screen === "playlists" ? "Playlists" :
+    screen === "favorites" ? "Favorites" :
     "Cover lab";
+  const browsing = screen === "search" || screen === "albums" || screen === "album" || screen === "history" || screen === "playlists" || screen === "favorites";
   return (
     <div className="mx-auto w-full max-w-[480px] px-3 pb-28 pt-3 min-[1100px]:max-w-[1100px] min-[1100px]:px-8">
       <div className="min-h-[calc(100dvh-6rem)] rounded-[28px] bg-panel p-4">
@@ -715,6 +858,7 @@ function Section() {
           <Logo onClick={() => setScreen("home")} />
           <h1 className="ml-auto font-display text-xl leading-none">{title}</h1>
         </header>
+        {browsing ? <CharacterWait /> : null}
         {screen === "search" && <SearchPage />}
         {screen === "albums" && <AlbumsPage />}
         {screen === "album" && <AlbumPage />}
@@ -722,6 +866,9 @@ function Section() {
         {screen === "socials" && <SocialsPage />}
         {screen === "tour" && <TourPage />}
         {screen === "editor" && <EditorPage />}
+        {screen === "history" && <HistoryPage />}
+        {screen === "playlists" && <PlaylistsPage />}
+        {screen === "favorites" && <FavoritesPage />}
       </div>
     </div>
   );
@@ -1116,6 +1263,310 @@ function Draggable({ sticker, onMove }: { sticker: Sticker; onMove: (uid: string
     >
       <StickerGlyph kind={sticker.kind} />
     </button>
+  );
+}
+
+function CharacterWait() {
+  const [reduce, setReduce] = useState(false);
+  const gaze = useGaze(!reduce);
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const apply = () => setReduce(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
+  return (
+    <div className="relative mb-3 h-40 overflow-hidden rounded-3xl bg-ink/15">
+      <div
+        className="flex h-full justify-center"
+        style={
+          reduce
+            ? undefined
+            : { transform: `translateX(${gaze.x * 12}px) rotate(${gaze.x * 4}deg)`, transformOrigin: "50% 30%" }
+        }
+      >
+        <img
+          src="/art/hero-clay.png"
+          alt=""
+          className={`h-64 w-auto max-w-none -translate-y-2 object-cover object-top ${reduce ? "" : "idle-sway"}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TransportModes() {
+  const repeat = usePlayer((s) => s.repeat);
+  const shuffle = usePlayer((s) => s.shuffle);
+  const setRepeat = usePlayer((s) => s.setRepeat);
+  const toggleShuffle = usePlayer((s) => s.toggleShuffle);
+  const cycle = () => {
+    const next: RepeatMode = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
+    setRepeat(next);
+  };
+  return (
+    <div className="mt-3 flex items-center justify-center gap-3">
+      <button
+        type="button"
+        aria-label="Shuffle"
+        aria-pressed={shuffle}
+        onClick={toggleShuffle}
+        className={`grid size-10 place-items-center rounded-full ${shuffle ? "bg-paper text-ink" : "bg-ink/25"}`}
+      >
+        <Shuffle className="size-4" />
+      </button>
+      <button type="button" aria-label={`Repeat ${repeat}`} onClick={cycle} className="grid size-10 place-items-center rounded-full bg-ink/25">
+        {repeat === "one" ? <Repeat1 className="size-4" /> : <Repeat className={`size-4 ${repeat === "all" ? "text-paper" : "opacity-60"}`} />}
+      </button>
+    </div>
+  );
+}
+
+function SaveToPlaylist({ trackId }: { trackId: string }) {
+  const playlists = useLibrary((s) => s.playlists);
+  const add = useLibrary((s) => s.addToPlaylist);
+  if (!trackId || !playlists.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap justify-center gap-2">
+      {playlists.map((playlist) => (
+        <button
+          key={playlist.id}
+          type="button"
+          onClick={() => add(playlist.id, trackId)}
+          className="rounded-full bg-ink/25 px-3 py-1 text-xs font-bold"
+        >
+          Add to {playlist.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function playSaved(item: HistoryItem) {
+  const track = resolveListenTrack(item.id) ?? {
+    id: item.id,
+    title: item.title,
+    artist: item.artist,
+    albumId: "",
+    duration: item.duration,
+    cover: item.cover,
+    streamUrl: item.streamUrl,
+    downloadPath: item.downloadPath,
+    plays: null,
+    likes: null,
+  };
+  useCatalog.getState().ensureTrack(track);
+  usePlayer.getState().playTrack(track.id);
+}
+
+function HistoryPage() {
+  const history = useLibrary((s) => s.history);
+  const trackId = usePlayer((s) => s.trackId);
+  const playing = usePlayer((s) => s.playing);
+  const liked = usePlayer((s) => s.liked);
+  const togglePlay = usePlayer((s) => s.togglePlay);
+  const toggleLike = usePlayer((s) => s.toggleLike);
+  if (!history.length) return <p className="text-sm text-paper/80">Songs you play will show up here.</p>;
+  return (
+    <ol className="flex flex-col gap-1">
+      {history.map((item, index) => (
+        <TrackRow
+          key={item.id}
+          track={{
+            id: item.id,
+            title: item.title,
+            artist: item.artist,
+            albumId: "",
+            duration: item.duration,
+            cover: item.cover,
+            streamUrl: item.streamUrl,
+            downloadPath: item.downloadPath,
+            plays: null,
+            likes: null,
+          }}
+          index={index}
+          active={item.id === trackId}
+          playing={playing}
+          liked={!!liked[item.id]}
+          onPlay={() => (item.id === trackId && playing ? togglePlay() : playSaved(item))}
+          onLike={() => toggleLike(item.id)}
+        />
+      ))}
+    </ol>
+  );
+}
+
+function FavoritesPage() {
+  const liked = usePlayer((s) => s.liked);
+  const trackMap = useCatalog((s) => s.trackMap);
+  const trackId = usePlayer((s) => s.trackId);
+  const playing = usePlayer((s) => s.playing);
+  const togglePlay = usePlayer((s) => s.togglePlay);
+  const toggleLike = usePlayer((s) => s.toggleLike);
+  const ids = Object.keys(liked).filter((id) => liked[id]);
+  const tracks = ids
+    .map((id) => trackMap[id] ?? resolveListenTrack(id))
+    .filter((track): track is Track => !!track?.id);
+  if (!tracks.length) return <p className="text-sm text-paper/80">Hearts you tap are kept on this device.</p>;
+  return (
+    <ol className="flex flex-col gap-1">
+      {tracks.map((track, index) => (
+        <TrackRow
+          key={track.id}
+          track={track}
+          index={index}
+          active={track.id === trackId}
+          playing={playing}
+          liked
+          onPlay={() => (track.id === trackId && playing ? togglePlay() : playSaved({ ...track, at: 0 }))}
+          onLike={() => toggleLike(track.id)}
+        />
+      ))}
+    </ol>
+  );
+}
+
+function PlaylistsPage() {
+  const playlists = useLibrary((s) => s.playlists);
+  const createPlaylist = useLibrary((s) => s.createPlaylist);
+  const [name, setName] = useState("");
+  const [active, setActive] = useState<string | null>(null);
+  const current = playlists.find((playlist) => playlist.id === active) ?? null;
+  return (
+    <div>
+      {current ? (
+        <PlaylistDetail playlist={current} onBack={() => setActive(null)} />
+      ) : (
+        <>
+          <form
+            className="mb-3 flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const id = createPlaylist(name);
+              setName("");
+              setActive(id);
+            }}
+          >
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              aria-label="Playlist name"
+              placeholder="New playlist"
+              className="min-w-0 flex-1 rounded-full bg-ink/25 px-4 py-2 text-sm font-bold outline-none placeholder:text-paper/60"
+            />
+            <button type="submit" className="rounded-full bg-paper px-4 py-2 text-sm font-extrabold text-ink">
+              Create
+            </button>
+          </form>
+          <div className="grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
+            {playlists.map((playlist) => (
+              <button key={playlist.id} type="button" onClick={() => setActive(playlist.id)} className={`${glass} p-4 text-left`}>
+                <p className="font-extrabold">{playlist.name}</p>
+                <p className="text-sm text-paper/80">{playlist.trackIds.length} tracks</p>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PlaylistDetail({ playlist, onBack }: { playlist: UserPlaylist; onBack: () => void }) {
+  const rename = useLibrary((s) => s.renamePlaylist);
+  const removeList = useLibrary((s) => s.deletePlaylist);
+  const removeTrack = useLibrary((s) => s.removeFromPlaylist);
+  const move = useLibrary((s) => s.moveInPlaylist);
+  const add = useLibrary((s) => s.addToPlaylist);
+  const trackId = usePlayer((s) => s.trackId);
+  const playing = usePlayer((s) => s.playing);
+  const liked = usePlayer((s) => s.liked);
+  const playTrack = usePlayer((s) => s.playTrack);
+  const togglePlay = usePlayer((s) => s.togglePlay);
+  const toggleLike = usePlayer((s) => s.toggleLike);
+  const [title, setTitle] = useState(playlist.name);
+  const rows = playlist.trackIds
+    .map((id) => resolveListenTrack(id))
+    .filter((track): track is Track => !!track);
+  return (
+    <div>
+      <button type="button" onClick={onBack} className="mb-3 text-sm font-bold text-paper/80">
+        All playlists
+      </button>
+      <form
+        className="mb-3 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          rename(playlist.id, title);
+        }}
+      >
+        <input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          aria-label="Rename playlist"
+          className="min-w-0 flex-1 rounded-full bg-ink/25 px-4 py-2 text-sm font-bold outline-none"
+        />
+        <button type="submit" className="rounded-full bg-paper px-3 py-2 text-xs font-extrabold text-ink">
+          Rename
+        </button>
+      </form>
+      <div className="mb-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const first = rows[0];
+            if (first) playTrack(first.id, playlist.id);
+          }}
+          className="inline-flex items-center gap-2 rounded-full bg-paper px-4 py-2 text-sm font-extrabold text-ink"
+        >
+          <Play className="size-4 fill-current" /> Play
+        </button>
+        <button
+          type="button"
+          onClick={() => trackId && add(playlist.id, trackId)}
+          className="rounded-full bg-ink/25 px-4 py-2 text-sm font-bold"
+        >
+          Add current song
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            removeList(playlist.id);
+            onBack();
+          }}
+          className="rounded-full bg-ink/25 px-4 py-2 text-sm font-bold"
+        >
+          Delete
+        </button>
+      </div>
+      <div className="flex flex-col gap-1">
+        {rows.map((track, index) => (
+          <div key={track.id} className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <TrackRow
+                track={track}
+                index={index}
+                active={track.id === trackId}
+                playing={playing}
+                liked={!!liked[track.id]}
+                onPlay={() => (track.id === trackId && playing ? togglePlay() : playTrack(track.id, playlist.id))}
+                onLike={() => toggleLike(track.id)}
+              />
+            </div>
+            <button type="button" aria-label="Move up" className="text-xs font-bold" onClick={() => move(playlist.id, track.id, -1)}>
+              Up
+            </button>
+            <button type="button" aria-label="Move down" className="text-xs font-bold" onClick={() => move(playlist.id, track.id, 1)}>
+              Down
+            </button>
+            <button type="button" aria-label="Remove from playlist" className="text-xs font-bold" onClick={() => removeTrack(playlist.id, track.id)}>
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
