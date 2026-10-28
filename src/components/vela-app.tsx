@@ -33,24 +33,44 @@ import { Logo, StickerGlyph } from "@/components/mark";
 const glass = "glass-card rounded-3xl text-paper";
 const kinds: StickerKind[] = ["star", "bolt", "flame", "disc", "spark", "moon", "heart", "drop"];
 
+function useLiteStage() {
+  const [lite, setLite] = useState(true);
+  useEffect(() => {
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    const narrow = window.matchMedia("(max-width: 1099px)").matches;
+    const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    const next = coarse || narrow || (typeof memory === "number" && memory <= 4);
+    setLite(next);
+    document.documentElement.classList.toggle("lite", next);
+    return () => document.documentElement.classList.remove("lite");
+  }, []);
+  return lite;
+}
+
+function useWideStage() {
+  const [wide, setWide] = useState<boolean | null>(null);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1100px)");
+    const apply = () => setWide(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
+  return wide;
+}
+
 export function VelaApp() {
   const screen = usePlayer((s) => s.screen);
   const playerOpen = usePlayer((s) => s.playerOpen);
   const notice = usePlayer((s) => s.notice);
   const theme = usePlayer((s) => s.theme);
+  const wide = useWideStage();
 
   return (
     <div className="min-h-dvh bg-ink text-paper" data-theme={theme}>
       <Engine />
       {screen === "home" ? (
-        <>
-          <div className="min-[1100px]:hidden">
-            <MobileHome />
-          </div>
-          <div className="hidden min-[1100px]:block">
-            <DesktopPoster />
-          </div>
-        </>
+        wide ? <DesktopPoster /> : <MobileHome />
       ) : (
         <Section />
       )}
@@ -178,8 +198,12 @@ function Engine() {
 }
 
 function ScenePanel({ children, cutout = false, notch = true }: { children: ReactNode; cutout?: boolean; notch?: boolean }) {
+  const lite = useLiteStage();
   const raw = useId().replace(/:/g, "");
   const id = `scene-${raw}`;
+  if (lite) {
+    return <div className="relative overflow-hidden rounded-[28px] bg-panel">{children}</div>;
+  }
   return (
     <div className="scene-glow relative">
       <svg width="0" height="0" className="absolute" aria-hidden>
@@ -202,45 +226,41 @@ function ScenePanel({ children, cutout = false, notch = true }: { children: Reac
 function MobileHome() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
-    <div className="relative mx-auto w-full max-w-[480px] px-3 pb-28 pt-6">
-      <ScenePanel notch={false}>
-        <div className="relative px-3 pb-4 pt-12">
-          <div className="flex items-center justify-between gap-3">
-            <Logo onClick={() => setScreen("home")} />
-            <TourPill />
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            <Chip label="Search" onClick={() => setScreen("search")} />
-            <Chip label="Albums" onClick={() => setScreen("albums")} />
-            <Chip label="Videos" onClick={() => setScreen("videos")} />
-            <Chip label="Socials" onClick={() => setScreen("socials")} />
-            <Chip label="History" onClick={() => setScreen("history")} />
-            <Chip label="Playlists" onClick={() => setScreen("playlists")} />
-            <Chip label="Favorites" onClick={() => setScreen("favorites")} />
-          </div>
-          <ThemeSwitch />
-          <div className="relative">
-            <Hero compact />
-            <div className="relative z-30 -mt-40 flex flex-col gap-3">
-              <LiveCard />
-              <PlayerCard />
-              <AlbumsCard />
-              <button
-                type="button"
-                onClick={() => setScreen("editor")}
-                className={`${glass} flex items-center justify-between px-4 py-3 text-left`}
-              >
-                <span>
-                  <span className="block text-sm font-extrabold">Create cover art</span>
-                  <span className="text-xs text-mute">Stickers stay on this device</span>
-                </span>
-                <Plus className="size-5" />
-              </button>
-              <TourCard />
-            </div>
-          </div>
+    <div className="relative mx-auto w-full max-w-[480px] px-3 pb-28 pt-4">
+      <div className="rounded-[28px] bg-panel px-3 pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <Logo onClick={() => setScreen("home")} />
+          <TourPill />
         </div>
-      </ScenePanel>
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+          <Chip label="Search" onClick={() => setScreen("search")} />
+          <Chip label="Albums" onClick={() => setScreen("albums")} />
+          <Chip label="Videos" onClick={() => setScreen("videos")} />
+          <Chip label="Socials" onClick={() => setScreen("socials")} />
+          <Chip label="History" onClick={() => setScreen("history")} />
+          <Chip label="Playlists" onClick={() => setScreen("playlists")} />
+          <Chip label="Favorites" onClick={() => setScreen("favorites")} />
+        </div>
+        <ThemeSwitch />
+        <Hero compact />
+      </div>
+      <div className="-mt-36 flex flex-col gap-3">
+        <LiveCard />
+        <PlayerCard />
+        <AlbumsCard />
+        <button
+          type="button"
+          onClick={() => setScreen("editor")}
+          className={`${glass} flex items-center justify-between px-4 py-3 text-left`}
+        >
+          <span>
+            <span className="block text-sm font-extrabold">Create cover art</span>
+            <span className="text-xs text-mute">Stickers stay on this device</span>
+          </span>
+          <Plus className="size-5" />
+        </button>
+        <TourCard />
+      </div>
     </div>
   );
 }
@@ -356,37 +376,114 @@ function ThemeSwitch() {
   );
 }
 
-function useGaze(enabled: boolean) {
-  const [gaze, setGaze] = useState({ x: 0, y: 0 });
+type LookTarget = { el: HTMLElement; strength: number };
+const lookTargets = new Set<LookTarget>();
+let lookInstalled = false;
+let lookTx = 0;
+let lookTy = 0;
+let lookCx = 0;
+let lookCy = 0;
+let lookFrame = 0;
+
+function paintLook() {
+  lookCx += (lookTx - lookCx) * 0.22;
+  lookCy += (lookTy - lookCy) * 0.22;
+  for (const target of lookTargets) {
+    const amp = target.strength;
+    target.el.style.transform = `translate(${(lookCx * 26 * amp).toFixed(2)}px, ${(lookCy * 12 * amp).toFixed(2)}px) rotate(${(lookCx * 14 * amp).toFixed(2)}deg)`;
+  }
+  if (Math.abs(lookTx - lookCx) > 0.01 || Math.abs(lookTy - lookCy) > 0.01) {
+    lookFrame = requestAnimationFrame(paintLook);
+  } else {
+    lookFrame = 0;
+  }
+}
+
+function nudgeLook() {
+  if (!lookFrame) lookFrame = requestAnimationFrame(paintLook);
+}
+
+function aimLook(clientX: number, clientY: number) {
+  const width = window.innerWidth || 1;
+  const height = window.innerHeight || 1;
+  lookTx = Math.max(-1, Math.min(1, (clientX / width) * 2 - 1));
+  lookTy = Math.max(-1, Math.min(1, (clientY / height) * 2 - 1));
+  nudgeLook();
+}
+
+function installLook() {
+  if (lookInstalled || typeof window === "undefined") return;
+  lookInstalled = true;
+  const onPointer = (event: PointerEvent) => aimLook(event.clientX, event.clientY);
+  const onTouch = (event: TouchEvent) => {
+    const touch = event.touches[0];
+    if (touch) aimLook(touch.clientX, touch.clientY);
+  };
+  const reset = () => {
+    lookTx = 0;
+    lookTy = 0;
+    nudgeLook();
+  };
+  window.addEventListener("pointerdown", onPointer, { passive: true });
+  window.addEventListener("pointermove", onPointer, { passive: true });
+  window.addEventListener("touchstart", onTouch, { passive: true });
+  window.addEventListener("touchmove", onTouch, { passive: true });
+  window.addEventListener("pointerup", reset);
+  window.addEventListener("pointercancel", reset);
+  window.addEventListener("touchend", reset);
+  window.addEventListener("touchcancel", reset);
+}
+
+function useLook(strength: number, enabled: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!enabled) return;
-    let frame = 0;
-    let next = { x: 0, y: 0 };
-    const onMove = (event: PointerEvent) => {
-      next = {
-        x: Math.max(-1, Math.min(1, (event.clientX / window.innerWidth) * 2 - 1)),
-        y: Math.max(-1, Math.min(1, (event.clientY / window.innerHeight) * 2 - 1)),
-      };
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setGaze(next));
-    };
-    window.addEventListener("pointermove", onMove, { passive: true });
+    const el = ref.current;
+    if (!enabled || !el) return;
+    installLook();
+    const target = { el, strength };
+    lookTargets.add(target);
     return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("pointermove", onMove);
+      lookTargets.delete(target);
+      el.style.transform = "";
     };
-  }, [enabled]);
-  return enabled ? gaze : { x: 0, y: 0 };
+  }, [enabled, strength]);
+  return ref;
+}
+
+function keyGreen(px: Uint8ClampedArray) {
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i] ?? 0;
+    const g = px[i + 1] ?? 0;
+    const b = px[i + 2] ?? 0;
+    const dom = g - (r > b ? r : b);
+    if (g > 60 && dom > 18) {
+      const t = Math.min(1, (dom - 18) / 42);
+      const alpha = 1 - t;
+      px[i + 1] = Math.max(0, Math.round(g - dom * t));
+      if (alpha < 0.05) {
+        px[i] = 0;
+        px[i + 1] = 0;
+        px[i + 2] = 0;
+        px[i + 3] = 0;
+      } else {
+        px[i + 3] = Math.round(255 * alpha);
+      }
+    }
+  }
 }
 
 function Hero({ compact = false }: { compact?: boolean }) {
   const playing = usePlayer((s) => s.playing);
+  const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const shownRef = useRef(false);
   const [reduce, setReduce] = useState(false);
-  const [shown, setShown] = useState(false);
-  const gaze = useGaze(!reduce);
+  const [live, setLive] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const lookRef = useLook(compact ? 1.25 : 1, !reduce);
+  useEffect(() => {
+    if (playing) setArmed(true);
+  }, [playing]);
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setReduce(media.matches);
@@ -397,74 +494,89 @@ function Hero({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-    const visible = canvas.getClientRects().length > 0 || compact;
-    if (!(playing && visible && !reduce)) {
-      video.pause();
-      shownRef.current = false;
-      setShown(false);
+    const root = rootRef.current;
+    if (!video || !canvas || !root || !playing || reduce) {
+      setLive(false);
+      video?.pause();
       return;
     }
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
-    let frame = 0;
+    if (!video.getAttribute("src")) video.src = "/art/dance-stage.mp4";
     let alive = true;
-    const paint = () => {
-      if (!alive) return;
-      if (video.currentTime > 1.2) video.currentTime = 0.02;
-      if (video.readyState >= 2 && video.videoWidth) {
-        if (canvas.width !== video.videoWidth) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-        }
-        const raw = getComputedStyle(document.documentElement).getPropertyValue("--color-panel").trim();
-        const hex = /^#[0-9a-fA-F]{6}$/.test(raw) ? raw : "#1ed760";
-        const pr = parseInt(hex.slice(1, 3), 16);
-        const pg = parseInt(hex.slice(3, 5), 16);
-        const pb = parseInt(hex.slice(5, 7), 16);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const shot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const px = shot.data;
-        for (let i = 0; i < px.length; i += 4) {
-          const r = px[i] ?? 0;
-          const g = px[i + 1] ?? 0;
-          const b = px[i + 2] ?? 0;
-          const score = g - (r > b ? r : b);
-          if (g > 50 && score > 28) {
-            const t = score >= 96 ? 1 : (score - 28) / 68;
-            px[i] = Math.round(r * (1 - t) + pr * t);
-            px[i + 1] = Math.round(g * (1 - t) + pg * t);
-            px[i + 2] = Math.round(b * (1 - t) + pb * t);
-          }
-        }
-        ctx.putImageData(shot, 0, 0);
-        if (!shownRef.current) {
-          shownRef.current = true;
-          setShown(true);
-        }
-      }
-      frame = requestAnimationFrame(paint);
+    let revealed = false;
+    let raf = 0;
+    let last = 0;
+    let onscreen = root.getClientRects().length > 0;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        onscreen = !!entry?.isIntersecting;
+        if (!onscreen) video.pause();
+        else if (!video.paused || video.readyState < 2) void video.play().catch(() => setLive(false));
+      },
+      { threshold: 0.08 },
+    );
+    io.observe(root);
+    const onVis = () => {
+      if (document.hidden) video.pause();
+      else if (onscreen) void video.play().catch(() => setLive(false));
     };
-    video.playbackRate = 0.7;
-    if (video.currentTime > 1.2) video.currentTime = 0;
-    void video.play().catch(() => setShown(false));
-    frame = requestAnimationFrame(paint);
+    document.addEventListener("visibilitychange", onVis);
+    const paint = (now: number) => {
+      if (!alive) return;
+      raf = requestAnimationFrame(paint);
+      if (document.hidden || !onscreen || video.readyState < 2 || !video.videoWidth) return;
+      const pixelRatio = window.devicePixelRatio || 1;
+      const highDensity = compact || pixelRatio >= 2.5;
+      if (now - last < (highDensity ? 50 : 33)) return;
+      last = now;
+      const box = canvas.getBoundingClientRect();
+      if (box.width < 2 || box.height < 2) return;
+      const dpr = Math.min(pixelRatio, highDensity ? 1.25 : 1.5);
+      let w = Math.max(2, Math.round(box.width * dpr));
+      let h = Math.max(2, Math.round(box.height * dpr));
+      const maxW = highDensity ? 280 : 560;
+      if (w > maxW) {
+        h = Math.max(2, Math.round((h * maxW) / w));
+        w = maxW;
+      }
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const srcW = video.videoWidth;
+      const srcH = video.videoHeight;
+      const scale = Math.max(w / srcW, h / srcH);
+      const cropW = w / scale;
+      const cropH = h / scale;
+      const sx = (srcW - cropW) * 0.5;
+      const sy = (srcH - cropH) * 0.08;
+      ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, w, h);
+      const shot = ctx.getImageData(0, 0, w, h);
+      keyGreen(shot.data);
+      ctx.putImageData(shot, 0, 0);
+      if (alive && !revealed) {
+        revealed = true;
+        setLive(true);
+      }
+    };
+    video.playbackRate = 1;
+    void video.play().catch(() => setLive(false));
+    raf = requestAnimationFrame(paint);
     return () => {
       alive = false;
-      cancelAnimationFrame(frame);
+      cancelAnimationFrame(raf);
+      io.disconnect();
+      document.removeEventListener("visibilitychange", onVis);
       video.pause();
+      video.removeAttribute("src");
+      video.load();
+      setLive(false);
     };
-  }, [playing, reduce, compact]);
+  }, [playing, reduce, compact, armed]);
   const word = compact ? "text-[3.4rem]" : "text-[7.2rem]";
-  const look = reduce
-    ? undefined
-    : {
-        transform: `translate(${gaze.x * (compact ? 8 : 16)}px, ${gaze.y * 6}px) rotate(${gaze.x * 5.5}deg)`,
-        transformOrigin: "50% 20%",
-        transition: "transform 200ms ease-out",
-      };
   return (
-    <div className={`pointer-events-none relative ${compact ? "h-[430px]" : "h-[680px]"}`}>
+    <div ref={rootRef} className={`pointer-events-none relative ${compact ? "h-[430px]" : "h-[680px]"}`}>
       <div className={`absolute inset-x-0 z-[5] flex items-start justify-between font-display leading-[0.78] text-paper ${compact ? "top-[44%] px-1" : "top-[42%] px-4 pr-[20%]"} ${word}`}>
         <span>MEL</span>
         <span>OBI</span>
@@ -472,22 +584,28 @@ function Hero({ compact = false }: { compact?: boolean }) {
       <p className="absolute left-1/2 top-3 z-20 -translate-x-1/2 text-xs font-extrabold tracking-[0.28em] text-paper/90">
         {playing ? "LIVE" : "MELOBI"}
       </p>
-      <div className="absolute inset-x-[8%] top-0 z-10 h-[92%]" style={look}>
+      <div ref={lookRef} data-look="hero" className="absolute inset-x-[8%] top-0 z-10 h-[92%]" style={{ transformOrigin: "50% 20%" }}>
         <div className={!playing && !reduce ? "idle-sway h-full" : "h-full"}>
           <img
             src="/art/hero-clay.png"
             alt="Melobi"
-            className="absolute inset-0 h-full w-full object-cover object-[center_8%] transition-opacity duration-500"
-            style={{ opacity: shown && !reduce ? 0 : 1 }}
+            width={900}
+            height={1200}
+            fetchPriority="high"
+            decoding="async"
+            className="absolute inset-0 h-full w-full object-cover object-[center_8%] transition-opacity duration-700"
+            style={{ opacity: live && !reduce ? 0 : 1 }}
           />
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 h-full w-full object-cover object-[center_8%] transition-opacity duration-500"
-            style={{ opacity: shown && !reduce ? 1 : 0 }}
+            className="absolute inset-0 h-full w-full transition-opacity duration-700"
+            style={{ opacity: live && !reduce ? 1 : 0 }}
           />
         </div>
       </div>
-      <video ref={videoRef} src="/art/dance-green.mp4" muted loop playsInline preload="auto" className="pointer-events-none absolute size-px opacity-0" />
+      {armed ? (
+        <video ref={videoRef} muted loop playsInline preload="none" className="pointer-events-none absolute size-px opacity-0" />
+      ) : null}
     </div>
   );
 }
@@ -1268,7 +1386,7 @@ function Draggable({ sticker, onMove }: { sticker: Sticker; onMove: (uid: string
 
 function CharacterWait() {
   const [reduce, setReduce] = useState(false);
-  const gaze = useGaze(!reduce);
+  const lookRef = useLook(1.15, !reduce);
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => setReduce(media.matches);
@@ -1277,19 +1395,15 @@ function CharacterWait() {
     return () => media.removeEventListener("change", apply);
   }, []);
   return (
-    <div className="relative mb-3 h-40 overflow-hidden rounded-3xl bg-ink/15">
-      <div
-        className="flex h-full justify-center"
-        style={
-          reduce
-            ? undefined
-            : { transform: `translateX(${gaze.x * 12}px) rotate(${gaze.x * 4}deg)`, transformOrigin: "50% 30%" }
-        }
-      >
+    <div className="relative mb-3 h-44 overflow-hidden rounded-3xl bg-ink/15">
+      <div ref={lookRef} data-look="wait" className="flex h-full justify-center" style={{ transformOrigin: "50% 22%" }}>
         <img
           src="/art/hero-clay.png"
           alt=""
-          className={`h-64 w-auto max-w-none -translate-y-2 object-cover object-top ${reduce ? "" : "idle-sway"}`}
+          width={900}
+          height={1200}
+          decoding="async"
+          className={`h-72 w-auto max-w-none -translate-y-4 object-cover object-top ${reduce ? "" : "idle-sway"}`}
         />
       </div>
     </div>

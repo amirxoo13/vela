@@ -73,15 +73,29 @@
     animation-play-state: running;
   }
   .idle-sway {
-    animation: idle-sway 4.8s ease-in-out infinite;
+    animation: idle-sway 3.6s ease-in-out infinite;
+    transform-origin: 50% 18%;
   }
   @keyframes disc-spin {
     to { transform: rotate(360deg); }
   }
   @keyframes idle-sway {
-    0%, 100% { transform: translateY(0) rotate(-0.6deg); }
-    50% { transform: translateY(6px) rotate(0.8deg); }
+    0%, 100% { transform: translateY(0) rotate(-2deg); }
+    50% { transform: translateY(14px) rotate(2.4deg); }
   }
+}
+
+/* Phones (and low-memory devices) skip GPU filters. Blur and drop-shadow of the
+   full stage allocate compositor textures at devicePixelRatio and were closing
+   Chrome on high-DPR Android. The cards stay tinted glass, without sampling the backdrop. */
+html.lite .glass-card {
+  background: color-mix(in srgb, var(--color-panel) 46%, black);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+html.lite .scene-glow {
+  filter: none;
 }
 
 [data-theme="crimson"] {

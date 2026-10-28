@@ -34,6 +34,12 @@ export const Route = createRootRoute({
         <HeadContent />
       </head>
       <body>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var n=navigator.deviceMemory;if(matchMedia('(max-width:1099px),(pointer:coarse)').matches||(typeof n==='number'&&n<=4))document.documentElement.classList.add('lite')}catch(e){}",
+          }}
+        />
         <PreviewHostBridge />
         <AuthProvider>
           <Outlet />
