@@ -1,0 +1,145 @@
+openapi: 3.0.3
+info:
+  title: RJ Music Backend
+  version: 1.0.0
+  description: |
+    Backend for a native mobile music app. Wraps the Radiojavan One-Api.
+    All JSON responses use `{ "data": ..., "meta": { "cached": bool, ... } }`.
+    Errors use `{ "error": { "status": int, "code": string, "message": string } }`.
+servers:
+  - url: http://localhost:8787
+paths:
+  /health:
+    get:
+      summary: Liveness + cache stats
+      responses: { '200': { description: OK } }
+  /api/v1/home:
+    get:
+      summary: Home feed (sections; any track objects inside are normalized)
+      responses: { '200': { description: OK }, default: { $ref: '#/components/responses/Error' } }
+  /api/v1/search:
+    get:
+      summary: Search tracks, albums, artists, videos, podcasts, playlists, profiles
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 100 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      query: { type: string }
+                      tracks: { type: array, items: { $ref: '#/components/schemas/Track' } }
+                      albums: { type: array, items: { type: object } }
+                      artists: { type: array, items: { type: object } }
+                      videos: { type: array, items: { type: object } }
+                      podcasts: { type: array, items: { type: object } }
+                      playlists: { type: array, items: { type: object } }
+                      profiles: { type: array, items: { type: object } }
+                      top: { type: array, items: { type: object } }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/v1/tracks/trending: &trackList
+    get:
+      summary: Track list (also /tracks/featured and /tracks/popular)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Track' } }
+                  meta:
+                    type: object
+                    properties: { cached: { type: boolean }, total: { type: integer }, limit: { type: integer }, offset: { type: integer } }
+  /api/v1/tracks/featured: *trackList
+  /api/v1/tracks/popular: *trackList
+  /api/v1/tracks/{id}:
+    get:
+      summary: Single normalized track
+      parameters: [ { $ref: '#/components/parameters/NumId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { $ref: '#/components/schemas/Track' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/tracks/{id}/download:
+    get:
+      summary: Proxied MP3 stream with Range support (seekable)
+      parameters:
+        - { $ref: '#/components/parameters/NumId' }
+        - { name: Range, in: header, schema: { type: string, example: 'bytes=0-1023' } }
+        - { name: inline, in: query, description: '1 = Content-Disposition inline instead of attachment', schema: { type: string, enum: ['1', 'true'] } }
+      responses:
+        '200': { description: Full file, content: { audio/mpeg: { schema: { type: string, format: binary } } } }
+        '206': { description: Partial content (Content-Range header set), content: { audio/mpeg: { schema: { type: string, format: binary } } } }
+        '416': { description: Range not satisfiable }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/albums/trending: { get: { summary: Trending albums (pass-through), responses: { '200': { description: OK } } } }
+  /api/v1/albums/{id}: { get: { summary: Album (pass-through; tracks normalized), parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+  /api/v1/playlists/{id}: { get: { summary: Playlist (pass-through; tracks normalized), parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+  /api/v1/videos/trending: { get: { summary: Trending videos, responses: { '200': { description: OK } } } }
+  /api/v1/videos/featured: { get: { summary: Featured videos, responses: { '200': { description: OK } } } }
+  /api/v1/videos/popular: { get: { summary: Popular videos, responses: { '200': { description: OK } } } }
+  /api/v1/videos/{id}: { get: { summary: Video, parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+  /api/v1/podcasts/dj: { get: { summary: DJ podcasts, responses: { '200': { description: OK } } } }
+  /api/v1/podcasts/shows: { get: { summary: Podcast shows, responses: { '200': { description: OK } } } }
+  /api/v1/podcasts/popular: { get: { summary: Popular podcasts, responses: { '200': { description: OK } } } }
+  /api/v1/podcasts/{id}: { get: { summary: Podcast, parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+  /api/v1/selfies/{id}: { get: { summary: Selfie, parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+  /api/v1/events: { get: { summary: Events, responses: { '200': { description: OK } } } }
+  /api/v1/events/{id}: { get: { summary: Event, parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+  /api/v1/users/{id}: { get: { summary: User profile by username, parameters: [ { $ref: '#/components/parameters/SlugId' } ], responses: { '200': { description: OK } } } }
+components:
+  parameters:
+    NumId: { name: id, in: path, required: true, schema: { type: string, pattern: '^\d{1,12}$' } }
+    SlugId: { name: id, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,128}$' } }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties: { status: { type: integer }, code: { type: string }, message: { type: string } }
+  schemas:
+    Track:
+      type: object
+      properties:
+        id: { type: integer, example: 157767 }
+        type: { type: string, enum: [track] }
+        title: { type: string, example: 'Novan - "Shodi Nooram"' }
+        artist: { type: string, example: Novan }
+        song: { type: string, example: Shodi Nooram }
+        artistFarsi: { type: string, nullable: true }
+        songFarsi: { type: string, nullable: true }
+        album: { type: string, nullable: true }
+        albumId: { type: integer, nullable: true }
+        durationSec: { type: integer, nullable: true, example: 164 }
+        plays: { type: integer, nullable: true, example: 2722477 }
+        likes: { type: integer, nullable: true, example: 7465 }
+        explicit: { type: boolean }
+        artworkUrl: { type: string, nullable: true }
+        thumbnailUrl: { type: string, nullable: true }
+        streamUrl: { type: string, nullable: true, description: Direct 256kbps MP3 URL }
+        hlsUrl: { type: string, nullable: true }
+        aacHqUrl: { type: string, nullable: true }
+        aacLqUrl: { type: string, nullable: true }
+        downloadPath: { type: string, example: /api/v1/tracks/157767/download }
+        shareUrl: { type: string, nullable: true }
+        releaseDate: { type: string, format: date-time, nullable: true }
