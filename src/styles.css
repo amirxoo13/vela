@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #070807;
+  --color-panel: #1f7d42;
+  --color-deep: #046b36;
+  --color-glass: #042818;
+  --color-paper: #f4f7f2;
+  --color-mute: #d5ecdf;
+  --color-line: #ffffff2e;
+  --color-hot: #ff4d6a;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Archivo Black", "Arial Black", sans-serif;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html,
+  body {
+    background: var(--color-ink);
+    color: var(--color-paper);
+    font-family: var(--font-sans);
+  }
+  body {
+    overflow-x: hidden;
+    min-height: 100dvh;
+  }
+  input[type="range"] {
+    appearance: none;
+    height: 0.25rem;
+    width: 100%;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-paper) 32%, transparent);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 999px;
+    background: var(--color-paper);
+    border: 0;
+  }
+}
+
+@layer components {
+  .hero-cut {
+    mask-image: radial-gradient(ellipse 96% 98% at 50% 46%, #000 78%, transparent 100%);
+  }
+  .swatch-green { background: #1f7d42; }
+  .swatch-crimson { background: #c41928; }
+  .swatch-night { background: #121418; }
+  .swatch-ice { background: #7ea8bc; }
+}
+
+[data-theme="crimson"] {
+  --color-panel: #c41928;
+  --color-deep: #8d1018;
+  --color-glass: #3c0a10;
+  --color-mute: #ffd0d4;
+}
+
+[data-theme="night"] {
+  --color-panel: #16181d;
+  --color-deep: #2c313a;
+  --color-glass: #0c0e12;
+  --color-mute: #c5ced8;
+}
+
+[data-theme="ice"] {
+  --color-panel: #3f6f86;
+  --color-deep: #2a5164;
+  --color-glass: #132833;
+  --color-mute: #d5e6ef;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
