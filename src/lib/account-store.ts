@@ -106,6 +106,10 @@ async function send<T>(path: string, method = "GET", body?: unknown): Promise<T>
   } | null;
   if (!response.ok) {
     const message = english(payload?.error?.message) || "Something went wrong";
+    if (response.status === 401 && path.startsWith("/api/v1/me")) {
+      localStorage.setItem(OWNER_KEY, "guest");
+      useAccount.setState({ status: "guest", user: null, busy: false, error: "Your session expired. Sign in again." });
+    }
     throw new AccountError(response.status, payload?.error?.code || "HTTP", message);
   }
   return payload?.data as T;

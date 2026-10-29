@@ -5,7 +5,23 @@ import appCss from "../styles.css?url";
 
 const APP_NAME = "Melobi";
 
+function NotFound() {
+  return (
+    <main className="grid min-h-dvh place-items-center bg-ink px-6 text-center text-paper">
+      <div>
+        <p className="text-xs font-extrabold tracking-[0.28em]">MELOBI</p>
+        <h1 className="mt-3 font-display text-5xl leading-none">Page not found</h1>
+        <p className="mt-3 text-sm text-paper/75">That link does not go anywhere in Melobi.</p>
+        <a href="/" className="mt-5 inline-flex min-h-11 items-center rounded-full bg-paper px-5 text-sm font-extrabold text-ink">
+          Back to Melobi
+        </a>
+      </div>
+    </main>
+  );
+}
+
 export const Route = createRootRoute({
+  notFoundComponent: NotFound,
   head: () => ({
     meta: [
       { charSet: "utf-8" },

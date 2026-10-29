@@ -27,13 +27,13 @@ import {
 } from "@/lib/catalog-store";
 import { resolveListenTrack, useLibrary, type HistoryItem, type UserPlaylist } from "@/lib/library";
 import { downloadHref, getData } from "@/lib/music-api";
-import { usePlayer, type RepeatMode, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
+import { applyHistory, usePlayer, type RepeatMode, type Screen, type Sticker, type StickerKind, type ThemeId } from "@/lib/player-store";
 import { FollowingScreen, OfflineGate, ProfileScreen, SavedAlbumsScreen, SignInSheet } from "@/components/account-ui";
 import { HomeFeed } from "@/components/home-feed";
 import { VideoPlayer } from "@/components/video-player";
 import { Logo, StickerGlyph } from "@/components/mark";
 import { useAccount } from "@/lib/account-store";
-import { syncMusicSession } from "@/lib/media-session";
+import { notePlayback, syncMusicSession } from "@/lib/media-session";
 import { shareAndToast } from "@/lib/share";
 
 const glass = "glass-card rounded-3xl text-paper";
@@ -106,14 +106,20 @@ function Engine() {
     mountAudio(ref.current, {
       onTime: (seconds) => {
         const state = usePlayer.getState();
-        if (!state.playing || state.scrubbing) return;
-        usePlayer.setState({ position: seconds });
+        if (state.playing && !state.scrubbing) usePlayer.setState({ position: seconds });
+        notePlayback(state.playing, state.scrubbing ? state.position : seconds);
       },
       onEnd: () => {
         if (usePlayer.getState().playing) usePlayer.getState().next();
       },
+      onFail: () => {
+        if (usePlayer.getState().playing) usePlayer.getState().failTrack();
+      },
       onDuration: (seconds) => {
         useCatalog.getState().noteDuration(usePlayer.getState().trackId, seconds);
+      },
+      onWaiting: (waiting) => {
+        usePlayer.getState().setBuffering(waiting && usePlayer.getState().playing);
       },
     });
     usePlayer.getState().hydrate();
@@ -165,6 +171,19 @@ function Engine() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  useEffect(() => {
+    const screens = new Set<Screen>(["home", "search", "albums", "album", "videos", "socials", "tour", "editor", "history", "playlists", "favorites", "profile", "following", "saved"]);
+    if (!history.state || typeof history.state !== "object" || !("melobi" in (history.state as object))) {
+      history.replaceState({ melobi: usePlayer.getState().screen, player: usePlayer.getState().playerOpen }, "");
+    }
+    const onPop = () => {
+      const state = history.state as { melobi?: Screen; player?: boolean } | null;
+      const screen = state?.melobi && screens.has(state.melobi) ? state.melobi : "home";
+      applyHistory(screen, Boolean(state?.player));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const position = usePlayer((s) => s.position);
   useEffect(() => {
     syncMusicSession(playing, position);
@@ -192,7 +211,7 @@ function Engine() {
   return (
     <audio
       ref={ref}
-      preload="metadata"
+      preload="auto"
       crossOrigin="anonymous"
       className="pointer-events-none absolute size-px opacity-0"
     />
@@ -799,6 +818,7 @@ function DownloadLink({ track, compact = false }: { track: Track; compact?: bool
 
 function Seek({ position, duration }: { position: number; duration: number }) {
   const seek = usePlayer((s) => s.seek);
+  const buffering = usePlayer((s) => s.buffering);
   const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
   const jump = (el: HTMLDivElement, clientX: number) => {
     const rect = el.getBoundingClientRect();
@@ -839,7 +859,7 @@ function Seek({ position, duration }: { position: number; duration: number }) {
         <span className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-paper" style={{ width: `${pct}%` }} />
         <span className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-paper" style={{ left: `${pct}%` }} />
       </div>
-      <span className="w-9 text-right text-xs tabular-nums text-mute">{fmt(duration)}</span>
+      <span className="w-9 text-right text-xs tabular-nums text-mute">{buffering ? "…" : fmt(duration)}</span>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import { pauseMedia, playMedia, seekMedia, mediaDuration } from "@/lib/audio-engine";
+import { pauseMedia, playMedia, preloadMedia, seekMedia, mediaDuration } from "@/lib/audio-engine";
 import { albumById, queueIds, trackById, useCatalog } from "@/lib/catalog-store";
 import { playlistQueue, trackSnap, useLibrary } from "@/lib/library";
 import { playbackSrc } from "@/lib/music-api";
+import { advanceQueue } from "@/lib/playback-queue";
 import { emitSync } from "@/lib/sync-events";
 import { pauseStageVideo } from "@/lib/stage-video";
 import { startBeat, stopBeat } from "@/lib/tone";
@@ -47,6 +48,7 @@ type State = Persisted & {
   videoId: string;
   session: number;
   playing: boolean;
+  buffering: boolean;
   position: number;
   scrubbing: boolean;
   playerOpen: boolean;
@@ -62,6 +64,8 @@ type State = Persisted & {
   playTrack: (trackId: string, albumId?: string) => void;
   next: () => void;
   prev: () => void;
+  failTrack: () => void;
+  setBuffering: (waiting: boolean) => void;
   seek: (position: number) => void;
   endScrub: () => void;
   toggleLike: (trackId?: string) => void;
@@ -115,7 +119,61 @@ function snapshot(s: State): Persisted {
 }
 
 function orderFor(albumId: string, trackId: string) {
+  if (albumId === "radio") {
+    const radio = useCatalog.getState().membership.radio;
+    if (radio?.includes(trackId)) return radio;
+  }
   return playlistQueue(albumId, trackId) ?? queueIds(albumId, trackId);
+}
+
+function relatedFor(order: string[], trackId: string): string[] {
+  const skip = new Set(order);
+  if (trackId) skip.add(trackId);
+  return Object.keys(useCatalog.getState().trackMap).filter((id) => {
+    if (skip.has(id)) return false;
+    const track = trackById(id);
+    return Boolean(track.streamUrl || track.downloadPath);
+  });
+}
+
+let heardIds: string[] = [];
+let playGen = 0;
+let misses = 0;
+let advancing = false;
+let fromPop = false;
+
+function pushNav(screen: Screen, playerOpen: boolean) {
+  if (fromPop || typeof history === "undefined") return;
+  const current = history.state as { melobi?: Screen; player?: boolean } | null;
+  if (current?.melobi === screen && Boolean(current.player) === playerOpen) return;
+  history.pushState({ melobi: screen, player: playerOpen }, "");
+}
+
+export function applyHistory(screen: Screen, playerOpen: boolean) {
+  fromPop = true;
+  usePlayer.setState({ screen, playerOpen });
+  fromPop = false;
+}
+
+function rememberRadio(ids: string[]) {
+  const list = ids.filter(Boolean);
+  useCatalog.setState((state) => ({
+    membership: { ...state.membership, radio: list },
+  }));
+}
+
+function peekSrc(albumId: string, trackId: string): string {
+  const order = orderFor(albumId, trackId);
+  const step = advanceQueue({
+    order,
+    trackId,
+    repeat: usePlayer.getState().repeat,
+    shuffle: usePlayer.getState().shuffle,
+    heard: heardIds,
+    related: relatedFor(order, trackId),
+  });
+  if (step.type !== "play") return "";
+  return playbackSrc(trackById(step.id));
 }
 
 function listen(trackId: string) {
@@ -135,6 +193,30 @@ function begin(trackId: string, position: number) {
   return playMedia(src, position);
 }
 
+function followUp(albumId: string, trackId: string) {
+  const src = peekSrc(albumId, trackId);
+  if (src) preloadMedia(src);
+}
+
+function startAt(trackId: string, albumId: string, position: number) {
+  const gen = ++playGen;
+  usePlayer.setState({ trackId, albumId, position, playing: true, buffering: true });
+  persist(snapshot(usePlayer.getState()));
+  listen(trackId);
+  void begin(trackId, position).then(
+    () => {
+      if (gen !== playGen) return;
+      misses = 0;
+      usePlayer.setState({ buffering: false });
+      followUp(albumId, trackId);
+    },
+    () => {
+      if (gen !== playGen) return;
+      usePlayer.getState().failTrack();
+    },
+  );
+}
+
 export const usePlayer = create<State>((set, get) => ({
   screen: "home",
   albumId: "",
@@ -142,6 +224,7 @@ export const usePlayer = create<State>((set, get) => ({
   session: 0,
   trackId: "",
   playing: false,
+  buffering: false,
   position: 0,
   scrubbing: false,
   playerOpen: false,
@@ -156,14 +239,28 @@ export const usePlayer = create<State>((set, get) => ({
   theme: "green",
   repeat: "all",
   shuffle: false,
-  setScreen: (screen) => set({ screen, playerOpen: false }),
-  openSearch: (query) => set({ screen: "search", searchSeed: query, playerOpen: false }),
-  openAlbum: (albumId) => set({ albumId, screen: "album", playerOpen: false }),
+  setScreen: (screen) => {
+    set({ screen, playerOpen: false });
+    if (screen === "home") {
+      if (!fromPop && typeof history !== "undefined") history.replaceState({ melobi: "home", player: false }, "");
+      return;
+    }
+    pushNav(screen, false);
+  },
+  openSearch: (query) => {
+    set({ screen: "search", searchSeed: query, playerOpen: false });
+    pushNav("search", false);
+  },
+  openAlbum: (albumId) => {
+    set({ albumId, screen: "album", playerOpen: false });
+    pushNav("album", false);
+  },
   openVideo: (videoId) => {
     stopBeat();
     pauseMedia();
     pauseStageVideo();
     set({ videoId, screen: "videos", playing: false, playerOpen: false, videoAutoplay: true });
+    pushNav("videos", false);
   },
   setSession: (session) => set({ session }),
   togglePlay: () => {
@@ -171,67 +268,67 @@ export const usePlayer = create<State>((set, get) => ({
     if (s.playing) {
       stopBeat();
       pauseMedia();
-      set({ playing: false });
+      set({ playing: false, buffering: false });
       return;
     }
-    set({ playing: true });
-    listen(s.trackId);
-    void begin(s.trackId, s.position).catch(() => {
-      stopBeat();
-      set({ playing: false });
-    });
+    if (!s.trackId) return;
+    startAt(s.trackId, s.albumId, s.position);
   },
   playTrack: (trackId, albumId) => {
     const track = trackById(trackId);
     const nextAlbum = albumId || track.albumId || get().albumId;
-    set({ trackId, albumId: nextAlbum, position: 0, playing: true });
-    persist(snapshot(get()));
-    listen(trackId);
-    void begin(trackId, 0).catch(() => {
-      stopBeat();
-      set({ playing: false });
-    });
+    if (nextAlbum !== get().albumId) heardIds = [];
+    misses = 0;
+    startAt(trackId, nextAlbum, 0);
   },
   next: () => {
+    if (advancing) return;
+    advancing = true;
+    try {
     const s = get();
-    if (s.repeat === "one") {
-      seekMedia(0);
-      set({ position: 0, playing: true });
-      listen(s.trackId);
-      void begin(s.trackId, 0).catch(() => {
-        stopBeat();
-        set({ playing: false });
-      });
-      return;
-    }
     const order = orderFor(s.albumId, s.trackId);
-    if (!order.length) return;
-    const index = order.indexOf(s.trackId);
-    if (!s.shuffle && s.repeat === "off" && index === order.length - 1) {
+    const step = advanceQueue({
+      order,
+      trackId: s.trackId,
+      repeat: s.repeat,
+      shuffle: s.shuffle,
+      heard: heardIds,
+      related: relatedFor(order, s.trackId),
+    });
+    if (step.type === "stop") {
       pauseMedia();
       stopBeat();
-      set({ playing: false, position: 0 });
+      set({ playing: false, buffering: false, position: 0 });
       return;
     }
-    let id = order[(index + 1) % order.length] ?? order[0];
-    if (s.shuffle && order.length > 1) {
-      const pool = order.filter((item) => item !== s.trackId);
-      id = pool[Math.floor(Math.random() * pool.length)] ?? id;
+    if (step.type === "restart") {
+      if (!s.playing) {
+        seekMedia(0);
+        set({ position: 0 });
+        return;
+      }
+      startAt(s.trackId, s.albumId, 0);
+      return;
     }
-    if (!id) return;
-    const track = trackById(id);
-    const inAlbum =
-      (useCatalog.getState().membership[s.albumId] ?? []).includes(id) ||
-      Boolean(playlistQueue(s.albumId, id));
-    set({ trackId: id, albumId: inAlbum ? s.albumId : track.albumId || s.albumId, position: 0 });
-    listen(id);
-    if (s.playing) {
-      void begin(id, 0).catch(() => {
-        stopBeat();
-        set({ playing: false });
-      });
+    heardIds = step.heard;
+    let albumId = s.albumId;
+    if (step.radio) {
+      rememberRadio(relatedFor(order, s.trackId));
+      albumId = "radio";
+      heardIds = [];
+    } else {
+      const inAlbum = order.includes(step.id) || Boolean(playlistQueue(s.albumId, step.id));
+      if (!inAlbum) albumId = trackById(step.id).albumId || s.albumId;
     }
-    persist(snapshot(get()));
+    if (!s.playing) {
+      set({ trackId: step.id, albumId, position: 0, buffering: false });
+      persist(snapshot(get()));
+      return;
+    }
+    startAt(step.id, albumId, 0);
+    } finally {
+      advancing = false;
+    }
   },
   prev: () => {
     const s = get();
@@ -242,25 +339,36 @@ export const usePlayer = create<State>((set, get) => ({
     }
     const order = orderFor(s.albumId, s.trackId);
     if (!order.length) return;
-    const index = order.indexOf(s.trackId);
+    const index = Math.max(0, order.indexOf(s.trackId));
     const id = order[(index - 1 + order.length) % order.length] ?? order[0];
     if (!id) return;
-    const track = trackById(id);
-    const inAlbum = Boolean(playlistQueue(s.albumId, id));
-    set({ trackId: id, albumId: inAlbum ? s.albumId : track.albumId || s.albumId, position: 0 });
-    listen(id);
-    if (s.playing) {
-      void begin(id, 0).catch(() => {
-        stopBeat();
-        set({ playing: false });
-      });
+    const albumId = playlistQueue(s.albumId, id) || order.includes(id) ? s.albumId : trackById(id).albumId || s.albumId;
+    if (!s.playing) {
+      set({ trackId: id, albumId, position: 0 });
+      persist(snapshot(get()));
+      return;
     }
-    persist(snapshot(get()));
+    startAt(id, albumId, 0);
+  },
+  failTrack: () => {
+    misses += 1;
+    if (misses > 4) {
+      stopBeat();
+      pauseMedia();
+      set({ playing: false, buffering: false });
+      get().flash("Couldn't play the next song");
+      return;
+    }
+    get().next();
+  },
+  setBuffering: (buffering) => {
+    if (get().buffering === buffering) return;
+    set({ buffering });
   },
   seek: (position) => {
     const track = trackById(get().trackId);
     const dur = mediaDuration() || track.duration;
-    const max = dur > 0.2 ? dur - 0.05 : Math.max(position, 0);
+    const max = dur > 0.2 ? Math.max(0, dur - 0.01) : Math.max(position, 0);
     const nextPos = Math.min(max, Math.max(0, position));
     seekMedia(nextPos);
     set({ position: nextPos, scrubbing: true });
@@ -289,7 +397,13 @@ export const usePlayer = create<State>((set, get) => ({
     const story = useCatalog.getState().stories.find((item) => item.id === id);
     useLibrary.getState().setFollow({ id, name: story?.title || "Artist", image: story?.image || "" }, on);
   },
-  setPlayerOpen: (playerOpen) => set({ playerOpen }),
+  setPlayerOpen: (playerOpen) => {
+    const was = get().playerOpen;
+    set({ playerOpen });
+    if (fromPop || typeof history === "undefined") return;
+    if (playerOpen) pushNav(get().screen, true);
+    else if (was && (history.state as { player?: boolean } | null)?.player) history.back();
+  },
   addSticker: (kind) => {
     const stickers = [
       ...get().stickers,

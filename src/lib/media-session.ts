@@ -40,15 +40,12 @@ function position(current: number, duration: number) {
   }
 }
 
-export function syncMusicSession(playing: boolean, positionSec: number) {
-  if (stageVideoPlaying()) return;
-  const player = usePlayer.getState();
-  const track = trackById(player.trackId);
-  const album = albumById(track.albumId || player.albumId);
-  publish(track.title, track.artist, album.title, track.cover || album.cover, playing);
-  const duration = track.duration || mediaDuration();
-  position(positionSec, duration);
-  if (!("mediaSession" in navigator)) return;
+let armed = false;
+let publishedId = "";
+
+function armMusicHandlers() {
+  if (!("mediaSession" in navigator) || armed) return;
+  armed = true;
   const seekBy = (delta: number) => {
     const next = Math.max(0, usePlayer.getState().position + delta);
     usePlayer.getState().seek(next);
@@ -76,7 +73,35 @@ export function syncMusicSession(playing: boolean, positionSec: number) {
   }
 }
 
+/** Lock-screen clock. Called from the audio element, not from a React render. */
+export function notePlayback(playing: boolean, positionSec: number) {
+  if (stageVideoPlaying()) return;
+  armMusicHandlers();
+  const player = usePlayer.getState();
+  const track = trackById(player.trackId);
+  const album = albumById(track.albumId || player.albumId);
+  const duration = track.duration || mediaDuration();
+  if (track.id !== publishedId || !publishedId) {
+    publishedId = track.id;
+    publish(track.title, track.artist, album.title, track.cover || album.cover, playing);
+  } else if ("mediaSession" in navigator) {
+    try {
+      navigator.mediaSession.playbackState = playing ? "playing" : "paused";
+    } catch {
+      /* ignore */
+    }
+  }
+  position(positionSec, duration);
+}
+
+export function syncMusicSession(playing: boolean, positionSec: number) {
+  publishedId = "";
+  notePlayback(playing, positionSec);
+}
+
 export function syncVideoSession(title: string, artist: string, cover: string, playing: boolean) {
+  armed = false;
+  publishedId = "";
   const node = stageVideoElement();
   publish(title, artist, "Video", cover, playing);
   if (node) position(node.currentTime || 0, node.duration || 0);
