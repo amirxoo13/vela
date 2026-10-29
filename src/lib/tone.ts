@@ -1,52 +1,27 @@
-let ctx: AudioContext | null = null;
-let analyser: AnalyserNode | null = null;
-let bound: HTMLAudioElement | null = null;
+/**
+ * Visual stand-in for the old analyser bars.
+ * Real playback stays on the <audio> element. Routing it through
+ * createMediaElementSource silences it whenever the AudioContext is suspended,
+ * which is the normal state on Android once the screen is off.
+ */
 
-function ac() {
-  if (!ctx) {
-    const Ctx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    ctx = new Ctx();
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 64;
-    analyser.connect(ctx.destination);
-  }
-  return ctx;
-}
-
-/** Route real playback through the analyser so the existing level bars keep moving. */
-export function bindMedia(el: HTMLAudioElement) {
-  try {
-    const context = ac();
-    if (bound !== el) {
-      const source = context.createMediaElementSource(el);
-      source.connect(analyser!);
-      bound = el;
-    }
-    void context.resume();
-  } catch {
-    /* element output still plays if the graph was already created */
-  }
-}
+let beating = false;
 
 export function startBeat(_variant: number) {
-  if (typeof window === "undefined") return;
-  void ac().resume();
+  beating = true;
 }
 
 export function stopBeat() {
-  /* pause is owned by the media element */
+  beating = false;
 }
 
+/** Decorative levels from play state. Nothing here touches the audio element. */
 export function levels() {
-  if (!analyser) return Array.from({ length: 22 }, () => 0.08);
-  const bins = new Uint8Array(analyser.frequencyBinCount);
-  const out: number[] = [];
   const take = 22;
-  for (let i = 0; i < take; i++) {
-    const idx = Math.min(bins.length - 1, Math.floor((i / take) * bins.length));
-    out.push(Math.max(0.08, (bins[idx] ?? 0) / 255));
-  }
-  return out;
+  if (!beating) return Array.from({ length: take }, () => 0.08);
+  const t = Date.now() / 180;
+  return Array.from({ length: take }, (_, i) => {
+    const wave = 0.45 + 0.55 * Math.abs(Math.sin(t + i * 0.45));
+    return Math.max(0.08, Math.min(1, wave));
+  });
 }

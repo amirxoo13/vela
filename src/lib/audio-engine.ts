@@ -1,5 +1,4 @@
 import { relayMediaUrl } from "@/lib/media-relay";
-import { bindMedia } from "@/lib/tone";
 
 type Listener = {
   onTime: (seconds: number) => void;
@@ -74,7 +73,6 @@ export function playMedia(url: string, position: number): Promise<void> {
   const node = el;
   if (!node || !url) return Promise.reject(new Error("Nothing to play"));
   const src = relayMediaUrl(url);
-  bindMedia(node);
   const mine = ++token;
   const absolute = new URL(src, window.location.href).href;
   if (node.src !== absolute) node.src = src;
