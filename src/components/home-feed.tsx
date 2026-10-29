@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { useCatalog, type Album, type Track, type Video } from "@/lib/catalog-store";
 import { resolveListenTrack, useLibrary, type HistoryItem } from "@/lib/library";
+import { Credit } from "@/components/credit";
 import { usePlayer } from "@/lib/player-store";
 
 function ShowAll({ label, onClick }: { label: string; onClick: () => void }) {
@@ -260,6 +261,7 @@ export function HomeFeed() {
         <a href="/terms" className="min-h-11 py-2">Terms</a>
         <a href="/about" className="min-h-11 py-2">About</a>
       </nav>
+      <Credit className="pt-1" />
     </div>
   );
 }

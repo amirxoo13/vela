@@ -5,6 +5,7 @@ import { useLibrary } from "@/lib/library";
 import { relayMediaUrl } from "@/lib/media-relay";
 import { apiUrl } from "@/lib/music-api";
 import { usePlayer } from "@/lib/player-store";
+import { Credit } from "@/components/credit";
 import { APP_VERSION } from "@/lib/version";
 
 export const AVATAR_PRESETS = [
@@ -192,6 +193,7 @@ export function ProfileScreen() {
           Continue as guest
         </button>
         <LegalLinks />
+        <Credit />
       </div>
     );
   }
@@ -305,6 +307,9 @@ export function ProfileScreen() {
           <LegalLinks />
         </div>
         <p className="mt-2 text-xs font-bold text-paper/60">Melobi {APP_VERSION}</p>
+        <div className="mt-3">
+          <Credit />
+        </div>
       </section>
 
       <div className="flex flex-wrap gap-2">

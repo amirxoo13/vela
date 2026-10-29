@@ -31,6 +31,7 @@ import { applyHistory, usePlayer, type RepeatMode, type Screen, type Sticker, ty
 import { FollowingScreen, OfflineGate, ProfileScreen, SavedAlbumsScreen, SignInSheet } from "@/components/account-ui";
 import { HomeFeed } from "@/components/home-feed";
 import { VideoPlayer } from "@/components/video-player";
+import { Credit } from "@/components/credit";
 import { Logo, StickerGlyph } from "@/components/mark";
 import { useAccount } from "@/lib/account-store";
 import { notePlayback, syncMusicSession } from "@/lib/media-session";
@@ -243,7 +244,7 @@ function ScenePanel({ children, cutout = false, notch = true }: { children: Reac
 function MobileHome() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
-    <div className="relative mx-auto w-full max-w-[480px] px-3 pb-28 pt-6">
+    <div className="relative mx-auto w-full max-w-[480px] px-3 pb-36 pt-6">
       <ScenePanel notch={false}>
         <div className="relative px-3 pb-4 pt-12">
           <div className="flex items-center justify-between gap-3">
@@ -295,6 +296,7 @@ function MobileHome() {
 function DesktopPoster() {
   const setScreen = usePlayer((s) => s.setScreen);
   return (
+    <div>
     <div className="relative mx-auto max-w-[1240px] px-6 pb-10 pt-8">
       <div className="absolute left-1/2 top-3 z-40 flex max-w-[92%] -translate-x-1/2 flex-wrap items-center justify-center gap-3 rounded-b-[28px] bg-ink px-5 pb-3 pt-2 shadow-[0_12px_30px_rgb(0_0_0/45%)]">
         <NavText />
@@ -340,6 +342,10 @@ function DesktopPoster() {
       </ScenePanel>
       <div className="absolute bottom-2 right-6 z-40 w-[250px]">
         <TourCard />
+      </div>
+    </div>
+      <div className="mx-auto max-w-[1240px] px-6 pb-8">
+        <Credit />
       </div>
     </div>
   );
@@ -1077,7 +1083,7 @@ function Section() {
     "Cover lab";
   const browsing = screen === "search" || screen === "albums" || screen === "album" || screen === "history" || screen === "playlists" || screen === "favorites" || screen === "profile" || screen === "following" || screen === "saved";
   return (
-    <div className="mx-auto w-full max-w-[480px] px-3 pb-28 pt-3 min-[1100px]:max-w-[1100px] min-[1100px]:px-8">
+    <div className="mx-auto w-full max-w-[480px] px-3 pb-36 pt-3 min-[1100px]:max-w-[1100px] min-[1100px]:px-8">
       <div className="min-h-[calc(100dvh-6rem)] rounded-[28px] bg-panel p-4">
         <header className="mb-4 flex items-center gap-3">
           <button type="button" aria-label="Back home" onClick={() => setScreen("home")} className="grid size-11 place-items-center rounded-full bg-ink/20">

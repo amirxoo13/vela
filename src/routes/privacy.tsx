@@ -25,6 +25,14 @@ function PrivacyPage() {
       <p>Melobi is not directed at children under 13, and we don't knowingly create accounts for them.</p>
       <h2 className="font-display text-2xl leading-none text-paper">Changes</h2>
       <p>If this policy changes, the updated version will be posted at /privacy with a new date.</p>
+      <h2 className="font-display text-2xl leading-none text-paper">Contact</h2>
+      <p>
+        Questions about this policy:{" "}
+        <a href="mailto:kami@amirxo.com" className="font-extrabold underline decoration-paper/30 underline-offset-2">
+          kami@amirxo.com
+        </a>
+        .
+      </p>
     </LegalLayout>
   );
 }

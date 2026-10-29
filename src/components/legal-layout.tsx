@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Credit } from "@/components/credit";
 import { APP_VERSION } from "@/lib/version";
 
 export function LegalLayout({ title, children }: { title: string; children: ReactNode }) {
@@ -17,6 +18,9 @@ export function LegalLayout({ title, children }: { title: string; children: Reac
           <a href="/about">About</a>
         </nav>
         <p className="mt-4 text-xs font-bold text-paper/50">Melobi {APP_VERSION}</p>
+        <div className="mt-3">
+          <Credit />
+        </div>
       </article>
     </div>
   );

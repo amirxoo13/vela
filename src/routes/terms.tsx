@@ -24,6 +24,14 @@ function TermsPage() {
       <p>Melobi is provided as-is. Playback, search, and the catalog can fail or change without notice. We don't promise uninterrupted service.</p>
       <h2 className="font-display text-2xl leading-none text-paper">Changes</h2>
       <p>Updated terms will be posted at /terms. Continuing to use Melobi after the date on the page means you accept the current terms.</p>
+      <h2 className="font-display text-2xl leading-none text-paper">Contact</h2>
+      <p>
+        Questions about these terms:{" "}
+        <a href="mailto:kami@amirxo.com" className="font-extrabold underline decoration-paper/30 underline-offset-2">
+          kami@amirxo.com
+        </a>
+        .
+      </p>
     </LegalLayout>
   );
 }
